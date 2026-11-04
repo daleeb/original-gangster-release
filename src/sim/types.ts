@@ -183,6 +183,10 @@ export interface Person {
   } | null;
   /** Absolute minute until which he counts as under fire (shot at, hit or not). */
   underFireUntil?: number;
+  /** Absolute minute at which a beaten man gets back on his feet. */
+  beatenUntil?: number;
+  /** The planned order a street order took him off; he goes back to it. */
+  resumeOrderId?: ID;
   /** Original city: walking to a street tram that stands for him, or riding
    * it (tramRiding.ts: 0x5DCDF0, 0x6220E0, goal 10 of 0x5D2740). */
   tram?: TramRide;
@@ -731,7 +735,7 @@ export interface CrimeRecord {
   arrestRisk: number;
   reported: boolean;
   /** The charge laid at an arrest, not a fresh crime: weekly passes that
-   * count the week's crimes (suspicion, the newspaper's fires) skip it. */
+   * count the week's crimes (suspicion, the newspaper, opinion, history) skip it. */
   charge?: true;
 }
 

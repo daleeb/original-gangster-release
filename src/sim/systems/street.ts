@@ -1,6 +1,6 @@
 import { addMessage, recordCrime } from '../events';
 import { respondToBureauViolence } from '../bureauViolence';
-import { keepContactDistance, killPerson } from '../execution';
+import { keepContactDistance, killPerson, knockDown } from '../execution';
 import { dist } from '../world';
 import { originalFireRoll } from '../fireRoll';
 import { presentAttack } from '../presentationEvents';
@@ -24,6 +24,11 @@ export function tickStreetOrders(w: WorldState, rng: Rng, minutes: number, loado
     // A fight that has gone quiet is over: the man gets back on his feet.
     const blow = p.closeCombat?.lastBlow;
     if (blow && (blow.week !== w.week || w.minute - blow.minute > CLOSE_COMBAT_QUIET)) endCloseCombat(p);
+    // A beaten man gets back on his feet after a while, not at the week's end.
+    if (p.status === 'beaten' && p.beatenUntil != null && p.beatenUntil <= absoluteMinute(w)) {
+      p.status = 'active';
+      delete p.beatenUntil;
+    }
     const so = p.streetOrder;
     if (!so || p.status !== 'active' || p.burningEscape?.week===w.week) continue;
 
@@ -155,10 +160,7 @@ export function tickStreetOrders(w: WorldState, rng: Rng, minutes: number, loado
         continue;
       }
       target.hp = Math.max(5, target.hp);
-      target.status = 'beaten';
-      target.orderId = null;
-      target.streetOrder = null;
-      clearDestination(target);
+      knockDown(w, target);
       respondToBureauViolence(w, p.gangId, target);
       recordCrime(w, rng, {
         gangId: p.gangId,

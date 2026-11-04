@@ -48,10 +48,10 @@ export const ORIGINAL_AI_PROFILES: readonly (readonly number[])[] = [
   // 0..7 Passive
   [10, 2, 0, 191, 63, 63, 0], [10, 4, 2, 191, 126, 127, 0], [10, 0, 1, 127, 80, 63, 0], [10, 12, 3, 191, 50, 127, 0],
   [5, 2, 1, 63, 80, 191, 0], [5, 4, 3, 63, 126, 127, 0], [5, 0, 0, 63, 126, 63, 0], [0, 12, 1, 63, 100, 255, 0],
-  // 8..15 Aggressive
+  // 8..15 Normal
   [10, 0, 2, 191, 63, 127, 1], [10, 12, 1, 191, 192, 63, 1], [5, 4, 0, 191, 126, 191, 1], [5, 8, 2, 63, 191, 63, 1],
   [5, 0, 3, 127, 126, 63, 1], [5, 4, 2, 63, 63, 191, 1], [0, 0, 0, 127, 192, 127, 1], [0, 8, 3, 63, 191, 127, 1],
-  // 16..23 Random
+  // 16..23 Aggressive
   [5, 2, 1, 127, 126, 127, 2], [5, 0, 1, 63, 192, 127, 2], [0, 4, 1, 63, 192, 191, 2], [0, 8, 1, 0, 255, 0, 2],
   [0, 12, 1, 127, 192, 127, 2], [0, 8, 1, 63, 192, 63, 2], [0, 4, 1, 0, 255, 191, 2], [0, 0, 1, 63, 192, 127, 2],
 ];
@@ -89,10 +89,10 @@ export function stanceOfHostility(h: number): DiplomacyLevel {
   return STANCES[h < 156 ? 1 : h < 189 ? 2 : h < 222 ? 3 : 4];
 }
 
-/** The ctor's roll: Passive rows 0..7, Aggressive 8..15, Random 16..23; the
- * remake's extra "normal" setting takes the ctor's fallback, any of the 24. */
+/** The ctor's roll (0x6CB1D2): Passive rows 0..7, Normal 8..15, Aggressive
+ * 16..23; Random takes the ctor's fallback, any of the 24. */
 export function rollOriginalProfile(opponents: GameOptions['opponents'], rng: Rng): number[] {
-  const band = opponents === 'passive' ? 0 : opponents === 'aggressive' ? 1 : opponents === 'random' ? 2 : null;
+  const band = opponents === 'passive' ? 0 : opponents === 'normal' ? 1 : opponents === 'aggressive' ? 2 : null;
   const row = band == null ? rng.int(0, 23) : band * 8 + rng.int(0, 7);
   return [...ORIGINAL_AI_PROFILES[row]];
 }
@@ -172,7 +172,7 @@ export function originalWeeklyStance(w: WorldState, rng: Rng, gang: Gang): Map<I
     const prev = gang.aiHostilitySnapshot[other.id] ?? gang.aiHostility[other.id] ?? start;
     const raw = gang.aiHostility[other.id] ?? start;
     // The change since last week, by band: Passive warms at half of it and
-    // cools at half as much again, Random the other way round, Aggressive
+    // cools at half as much again, Aggressive the other way round, Normal
     // takes it as it is. Clamped to a byte; the 106 floor comes after the bump.
     const change = raw - prev, rising = change > 0;
     const step = profile[6] === 0 ? Math.trunc(rising ? change / 2 : change * 3 / 2)

@@ -193,6 +193,7 @@ export function issueOrder(w: WorldState, gangId: ID, input: IssueOrderInput): A
   const def = ORDERS[input.type];
   if (!def) return fail('No such order.');
   if(input.type==='export'&&!team.vehicles.truck)return fail('Allocate a truck to this crew before ordering Export.');
+  if (input.type === 'bomb' && !(team.weapons.explosives ?? 0) && !(gang.weapons.explosives ?? 0)) return fail('Buy explosives before ordering a Bomb.');
   const opts = defaultOptions(input.opts);
   if (!Number.isInteger(opts.manpower) || opts.manpower < 1) return fail('Choose a positive whole number of people.');
   if (opts.manpower > team.memberIds.length + 1) return fail(`${lt.name} has only ${team.memberIds.length + 1} people.`);
@@ -242,6 +243,13 @@ export function issueOrder(w: WorldState, gangId: ID, input: IssueOrderInput): A
   }
 
   const order = previewOrder(w, gangId, { ...input, buildingIds, blockIds, opts })!;
+  // Refuse a purchase the gang cannot pay for now, rather than send the crew
+  // out for a week to fail at the door. The order still checks again on arrival.
+  const price = input.type === 'buyPremises' ? buildingValue(w, w.buildings[targetBuildingIds[0]])
+    : input.type === 'setUpBusiness' ? BUILDING_BY_ID[opts.businessTypeId!]?.cost ?? 0
+    : input.type === 'donate' ? order.opts.amount ?? 0
+    : 0;
+  if (price > gang.cash) return fail(`You cannot afford it: it costs $${Math.round(price).toLocaleString('en-US')}.`);
 
   if (team.timeUsed + order.estimatedMinutes > MINUTES_PER_WEEK * 1.02) {
     // Undermanned for the whole area, the lieutenant offers what he can manage.
@@ -540,6 +548,11 @@ export function moveToPool(w: WorldState, gangId: ID, personId: ID): ApiResult {
   return ok();
 }
 
+/** A man who signs on is off the market: take him off every gang's list. */
+function unlistRecruit(w: WorldState, personId: ID): void {
+  for (const g of Object.values(w.gangs)) g.recruitIds = g.recruitIds.filter((id) => id !== personId);
+}
+
 export function hireRecruit(
   w: WorldState,
   gangId: ID,
@@ -574,7 +587,7 @@ export function hireRecruit(
     p.inVehicle = false;
     const office = nearestOffice(w, gangId, p.pos);
     if (office) p.pos = { ...w.lots[office.lotId].center };
-    gang.recruitIds = gang.recruitIds.filter((id) => id !== personId);
+    unlistRecruit(w, personId);
     return ok(`${p.name} has joined you.`);
   }
 
@@ -589,7 +602,7 @@ export function hireRecruit(
   p.payDemand = hoodPayDemand(p, wantsLieutenant && !noSlot ? 'lieutenant' : 'hood');
   p.pay = p.payDemand;
   if (w.cityLayout?.original) originalStartingWage(p, gangId);
-  gang.recruitIds = gang.recruitIds.filter((id) => id !== personId);
+  unlistRecruit(w, personId);
 
   p.inVehicle = false;
   const office = nearestOffice(w, gangId, p.pos);
@@ -1180,12 +1193,17 @@ export function issueStreetOrder(
     if(car&&(!a.inVehicle||car.occupantIds.some(id=>!personIds.includes(id))))alight(w,a);
     else if(car)car.returning=false;
     cancelSpecialistVisits(w, a.id);
-    // Drop them from their standing order for the moment.
+    // Take them off their planned order for the moment: they go back to it
+    // when the street order is done (tickOrders). A delivery under way is the
+    // exception; its goods go back and the man leaves it for good.
     if (a.orderId != null) {
       const order = w.orders[a.orderId];
       if (order?.type === 'guardBusiness') releaseGuardPost(w, a.id);
-      if (order) order.assignedIds = order.assignedIds.filter((id) => id !== a.id);
-      if (order && !order.assignedIds.length) recoverExportGoods(w, order, false);
+      if (order && !order.exportDelivery && !order.raidDelivery) a.resumeOrderId = order.id;
+      else if (order) {
+        order.assignedIds = order.assignedIds.filter((id) => id !== a.id);
+        if (!order.assignedIds.length) recoverExportGoods(w, order, false);
+      }
       a.orderId = null;
     }
     a.streetOrder = { type, targetPersonId, pos: pos ? { ...pos } : null };
@@ -1217,13 +1235,15 @@ export function returnToBase(w: WorldState, gangId: ID, personId: ID): ApiResult
   if (!p || p.gangId !== gangId) return fail('Not one of yours.');
   if (p.status !== 'active') return fail(`${p.name} is in no position to move.`);
   cancelSpecialistVisits(w, p.id);
-  if (p.orderId != null) {
-    const order = w.orders[p.orderId];
+  const orderId = p.orderId ?? p.resumeOrderId;
+  if (orderId != null) {
+    const order = w.orders[orderId];
     if (order?.type === 'guardBusiness') releaseGuardPost(w, p.id);
     if (order) order.assignedIds = order.assignedIds.filter((id) => id !== p.id);
     if (order && !order.assignedIds.length) recoverExportGoods(w, order, false);
     p.orderId = null;
   }
+  delete p.resumeOrderId;
   p.streetOrder = null;
   const office = nearestOffice(w, gangId, p.pos);
   if (!office) return fail('You have no office to return to.');

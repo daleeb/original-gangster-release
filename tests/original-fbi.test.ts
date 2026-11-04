@@ -49,17 +49,17 @@ describe('the original FBI suspicion of a boss (0x4F5860, 0x6D04C2, 0x4F5AE0)', 
     expect(originalSuspicionRise(w, ai)).toBe(20);
   });
 
-  it('weighs premises by the Opponents setting: the player 16 Passive and 8 Random, a computer gang 14 Random', () => {
+  it('weighs premises by the Opponents setting: the player 16 Passive and 8 Aggressive, a computer gang 14 Aggressive (R-03)', () => {
     const passive = city('passive');
     passive.player.accountantId = null;
     takings(passive.w, passive.player, 1000, 32_000);
     expect(originalSuspicionRise(passive.w, passive.player)).toBe(20);   // base 1600
-    const random = city('random');
-    random.player.accountantId = null; random.ai.accountantId = null;
-    takings(random.w, random.player, 1000, 16_000);
-    expect(originalSuspicionRise(random.w, random.player)).toBe(20);     // base 800
-    takings(random.w, random.ai, 1000, 28_000);
-    expect(originalSuspicionRise(random.w, random.ai)).toBe(20);         // base 1400
+    const aggressive = city('aggressive');
+    aggressive.player.accountantId = null; aggressive.ai.accountantId = null;
+    takings(aggressive.w, aggressive.player, 1000, 16_000);
+    expect(originalSuspicionRise(aggressive.w, aggressive.player)).toBe(20);     // base 800
+    takings(aggressive.w, aggressive.ai, 1000, 28_000);
+    expect(originalSuspicionRise(aggressive.w, aggressive.ai)).toBe(20);         // base 1400
   });
 
   it('lets the accountant hide more, the player\'s at two thirds of his intelligence', () => {

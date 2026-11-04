@@ -19,7 +19,7 @@ export function weeklyOpinion(w: WorldState, rng: Rng): void {
   // ---- how the mayor feels about each gang
   for (const gang of Object.values(w.gangs)) {
     if (gang.eliminated) continue;
-    const crimesThisWeek = w.crimes.filter((c) => c.week === w.week && c.gangId === gang.id);
+    const crimesThisWeek = w.crimes.filter((c) => c.week === w.week && c.gangId === gang.id && !c.charge);
     const severity = crimesThisWeek.reduce((s, c) => s + c.arrestRisk * 10, 0);
     if (mayor) {
       let delta = -severity * 0.5 + gang.popularity * 0.05;
@@ -81,7 +81,7 @@ export function weeklyOpinion(w: WorldState, rng: Rng): void {
 
   // ---- violence sours the neighbourhood it happens in
   for (const c of w.crimes) {
-    if (c.week !== w.week) continue;
+    if (c.week !== w.week || c.charge) continue;
     const bl = c.buildingId != null ? w.buildings[c.buildingId] : null;
     const pos = bl ? w.lots[bl.lotId].center : null;
     if (pos) shift(pos, 45, c.gangId, -c.arrestRisk * 4);
@@ -139,7 +139,7 @@ export function weeklyOpinion(w: WorldState, rng: Rng): void {
 function mostActiveGang(w: WorldState): Gang | null {
   const counts: Record<ID, number> = {};
   for (const c of w.crimes) {
-    if (c.week !== w.week) continue;
+    if (c.week !== w.week || c.charge) continue;
     counts[c.gangId] = (counts[c.gangId] ?? 0) + c.arrestRisk * 10;
   }
   let best: Gang | null = null;

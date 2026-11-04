@@ -548,6 +548,7 @@ function ClipboardSheet() {
   const sim = useGame((s) => s.sim)!;
   const jobCard = useGame((s) => s.jobCard);
   const requestCamera = useGame((s) => s.requestCamera);
+  const centreOnPerson = useGame((s) => s.centreOnPerson);
   const notify = useGame((s) => s.notify);
   const w = sim.world;
   const gang = sim.playerGang;
@@ -582,7 +583,7 @@ function ClipboardSheet() {
     if (def?.target === 'person') {
       handleMapHit({ personId: id, buildingId: null, blockId: null, point: p.pos });
       notify(`${p.name} is the target.`);
-    } else if (p) requestCamera({ x: p.pos.x, y: p.pos.y });
+    } else if (p) centreOnPerson(id);
   };
   const pickSite = (id: ID) => {
     const b = w.buildings[id];

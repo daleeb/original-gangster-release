@@ -8,13 +8,13 @@ import { Rng } from '../src/sim/rng';
 import { validateSaveWorld } from '../src/sim/saveSchema';
 
 describe('original AI profile and stance machine (0x6CAB20, 0x6DD950)', () => {
-  it('rolls a profile from the difficulty band', () => {
+  it('rolls a profile from the difficulty band: Passive 0..7, Normal 8..15, Aggressive 16..23 (R-03)', () => {
     const rng = new Rng(4);
     for (let i = 0; i < 40; i++) {
       expect(rollOriginalProfile('passive', rng)[6]).toBe(0);
-      expect(rollOriginalProfile('aggressive', rng)[6]).toBe(1);
-      expect(rollOriginalProfile('random', rng)[6]).toBe(2);
-      const any = rollOriginalProfile('normal', rng).join();
+      expect(rollOriginalProfile('normal', rng)[6]).toBe(1);
+      expect(rollOriginalProfile('aggressive', rng)[6]).toBe(2);
+      const any = rollOriginalProfile('random', rng).join();
       expect(ORIGINAL_AI_PROFILES.some(r => r.join() === any)).toBe(true);
     }
   });
@@ -23,7 +23,7 @@ describe('original AI profile and stance machine (0x6CAB20, 0x6DD950)', () => {
     const w = createWorld({ ...newCampaignOptions(), seed: 404, opponents: 'aggressive' }).world;
     for (const g of Object.values(w.gangs)) {
       if (g.isPlayer) expect(g.aiProfile).toBeUndefined();
-      else expect(g.aiProfile![6]).toBe(1);
+      else expect(g.aiProfile![6]).toBe(2);
     }
     expect(() => validateSaveWorld(JSON.parse(JSON.stringify(w)))).not.toThrow();
   });

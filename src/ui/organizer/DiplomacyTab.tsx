@@ -26,7 +26,7 @@ const LEVEL_DESC: Record<DiplomacyLevel, string> = {
 export function DiplomacyTab() {
   const sim = useGame((s) => s.sim)!;
   const notify = useGame((s) => s.notify);
-  const requestCamera = useGame((s) => s.requestCamera);
+  const centreOnPerson = useGame((s) => s.centreOnPerson);
   useGame((s) => s.version);
   const [snitchTargets, setSnitchTargets] = useState<ID[]>([]);
   const [viewGang, setViewGang] = useState<ID | null>(null);
@@ -137,7 +137,7 @@ export function DiplomacyTab() {
                   <button
                     key={p.id}
                     className="list-row"
-                    onClick={() => requestCamera({ x: p.pos.x, y: p.pos.y })}
+                    onClick={() => centreOnPerson(p.id)}
                   >
                     <span className="name tiny">{p.name}</span>
                     <span className="muted tiny">{p.role}</span>

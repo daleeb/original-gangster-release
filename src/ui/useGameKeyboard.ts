@@ -110,7 +110,7 @@ export function useGameKeyboard() {
             if (out.length) {
               const cur = out.indexOf(s.selectedPersonId ?? -1);
               const next = out[(cur + 1) % out.length];
-              s.selectPerson(next);
+              s.focusPerson(next);
               const p = world.people[next];
               if (p) s.requestCamera({ x: p.pos.x, y: p.pos.y });
             } else s.notify('Nobody from that crew is out.');

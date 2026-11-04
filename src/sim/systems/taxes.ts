@@ -54,6 +54,11 @@ export function weeklyTaxes(w: WorldState, rng: Rng): void {
   }
 }
 
+/** Held-back tax not yet hidden: the laundering pool in the original city. */
+export function taxNotCoveredUp(w: WorldState, gang: Gang): number {
+  return w.cityLayout?.original ? Math.max(0, gang.launderPool ?? 0) : gang.uncoveredTax;
+}
+
 /**
  * The original city's laundering pool. 0x4BEF30: a free accountant launders it
  * down by the week's business takings × intelligence/31 (never below 0).

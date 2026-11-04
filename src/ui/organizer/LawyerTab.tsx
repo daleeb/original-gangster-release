@@ -42,7 +42,7 @@ export function LawyerTab() {
   const wanted = Object.values(w.people)
     .filter((p) => p.gangId === gang.id && p.wanted > 25 && p.status !== 'dead')
     .sort((a, b) => b.wanted - a.wanted);
-  const crimes = w.crimes.filter((c) => c.gangId === gang.id && c.week >= w.week - 1);
+  const crimes = w.crimes.filter((c) => c.gangId === gang.id && c.week >= w.week - 1 && !c.charge);
 
   const officials: Person[] = (() => {
     switch (officialKind) {

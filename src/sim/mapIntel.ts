@@ -1,5 +1,8 @@
-import type { Block, Building, ID, WorldState } from './types';
+import type { Block, Building, ID, Person, Vec2, WorldState } from './types';
 import { standingTerritorySite, territorySites } from './territory';
+import { CELL } from './constants';
+import { buildingList } from './entityLists';
+import { dist } from './world';
 
 /** The information a gang can put on its map, not the simulation's full truth. */
 export function buildingMapIntel(b: Building, viewer: ID | null) {
@@ -18,6 +21,20 @@ export function buildingMapIntel(b: Building, viewer: ID | null) {
     protectionGangId,
     isHQ: siteKnown && b.isHQ && b.state !== 'destroyed' && ownerGangId != null && (mine || knowledge >= 3),
   };
+}
+
+/**
+ * Where a gang's map can place a person. Your own people and civilians are
+ * where they are; a rival only at premises you have identified as his gang's
+ * (inside, or at the door of its office), never at his true position.
+ */
+export function personMapPosition(w: WorldState, viewer: ID, p: Person): Vec2 | null {
+  if (p.gangId == null || p.gangId === viewer) return p.pos;
+  const inside = p.buildingId != null ? w.buildings[p.buildingId] : null;
+  const site = inside ?? buildingList(w).find(b => b.ownerGangId === p.gangId && b.typeId === 'office' &&
+    b.state !== 'destroyed' && dist(w.lots[b.lotId].center, p.pos) < CELL);
+  if (!site || site.ownerGangId !== p.gangId || buildingMapIntel(site, viewer).ownerGangId !== p.gangId) return null;
+  return w.lots[site.lotId].center;
 }
 
 /** Only identified holdings establish visible territory (manual p.12).

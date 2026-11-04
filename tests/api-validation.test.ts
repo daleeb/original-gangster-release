@@ -210,6 +210,8 @@ describe('order validation is atomic', () => {
     rejectsWithoutMutation(w, () => issueStreetOrder(w, gang.id, [actor.id], 'goTo', null, { x: NaN, y: 0 }));
     expect(issueStreetOrder(w, gang.id, [actor.id], 'tail', rival.lieutenantId, null).ok).toBe(true);
     expect(actor.orderId).toBeNull();
-    expect(w.orders[team.orderIds[0]].assignedIds).toEqual([]);
+    // He keeps his place on the planned order, to go back to it (R-02).
+    expect(w.orders[team.orderIds[0]].assignedIds).toEqual([actor.id]);
+    expect(actor.resumeOrderId).toBe(team.orderIds[0]);
   });
 });

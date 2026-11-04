@@ -8,6 +8,7 @@ import { orderPeopleBySite, selectableOrderSite, selectedOrderSites } from '../a
 import { plannedCrimeBlocks, specialistPeopleBySite } from '../app/specialistSelection';
 import { specialistTargetEligible } from '../sim/specialistJobs';
 import { buildingMapIntel, knownBlockOwners } from '../sim/mapIntel';
+import { recentEventCounts } from '../sim/events';
 import { drawTerritoryOutline } from '../render/territoryOutline';
 import { lieutenantAreaChoices } from '../sim/lieutenantAreas';
 import type { Block, ID, WorldState } from '../sim/types';
@@ -245,6 +246,7 @@ export function Blueprint() {
       drawCityLandscape(ctx, w, X, Y, S);
       ctx.lineJoin = 'round';
       const markers: PlanMarker[] = [];
+      const events = heat === 'events' ? recentEventCounts(w) : null;
       for (const blk of activeBlocks(w)) {
         const rect = planBlockRect(blk), x = X(rect.x), y = Y(rect.y), s = S(rect.w), h = S(rect.h);
         if (x + s < area.x || y + h < area.y || x > area.x + area.w || y > area.y + area.h) continue;
@@ -276,7 +278,7 @@ export function Blueprint() {
             hq: intel.isHQ, size: Math.min(ls, S(lr.h)) * .8,
             color: intel.isHQ && intel.ownerGangId != null ? GANG_COLORS[w.gangs[intel.ownerGangId].color].hex : '#4e635b' });
         }
-        const tint = heat ? overlayTint(w, blk, heat, gang.id) : null;
+        const tint = heat ? overlayTint(w, blk, heat, gang.id, events) : null;
         if (tint) { ctx.fillStyle = tint; ctx.globalAlpha = .72; ctx.fillRect(x, y, s, h); ctx.globalAlpha = 1; }
         if (showLt && !policeArea && (ltBlocks.has(blk.id) || areaChoices?.other.has(blk.id))) {
           const mine = ltBlocks.has(blk.id), color = mine ? '#ffffff' : GANG_COLORS[gang.color].hex;
@@ -685,7 +687,7 @@ function openingView(w: WorldState, area: MapArea, gangId: ID): View {
   return { zoom, panX: area.x + area.w / 2 - f.ox - pos.x * f.scale, panY: area.y + area.h / 2 - f.oy - pos.y * f.scale };
 }
 
-function overlayTint(w: WorldState, blk: Block, overlay: HeatKey, gangId: ID): string {
+function overlayTint(w: WorldState, blk: Block, overlay: HeatKey, gangId: ID, events: Map<ID, number> | null): string {
   const legend = HEAT_LEGENDS[overlay];
   if (overlay === 'landValue') return mixColor(legend.start, legend.end, blk.landValue / 100);
   if (overlay === 'crime') return mixColor(legend.start, legend.end, blk.crimeHeat / 60);
@@ -705,7 +707,7 @@ function overlayTint(w: WorldState, blk: Block, overlay: HeatKey, gangId: ID): s
       ? mixColor('#ede5d2', legend.end, avg / 100)
       : mixColor('#ede5d2', legend.start, -avg / 100);
   }
-  return mixColor(legend.start, legend.end, blk.crimeHeat / 40);
+  return mixColor(legend.start, legend.end, (events?.get(blk.id) ?? 0) / 4);
 }
 
 function mixColor(a: string, b: string, amount: number): string {

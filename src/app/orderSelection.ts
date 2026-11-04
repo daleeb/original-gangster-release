@@ -20,7 +20,11 @@ export function selectableOrderSite(w: WorldState, gangId: ID, card: Pick<JobCar
 export function selectableOrderPerson(w: WorldState, gangId: ID, type: OrderType, p: Person): boolean {
   if (ORDERS[type].target !== 'person' || ['dead', 'jailed', 'kidnapped'].includes(p.status)) return false;
   if (type === 'kidnap' && (p.gangId == null || p.gangId === gangId)) return false;
-  return p.gangId == null || p.gangId === gangId || w.gangs[gangId].knownPeople.includes(p.id);
+  if (p.gangId == null || p.gangId === gangId || w.gangs[gangId].knownPeople.includes(p.id)) return true;
+  // A stranger at a site you know can be named as a target: the crew has to
+  // hunt for him first (previewOrder marks the order as hunting).
+  const site = p.buildingId != null ? w.buildings[p.buildingId] : null;
+  return !!site && buildingMapIntel(site, gangId).siteKnown;
 }
 
 /** A public owner, manager, or known occupant can be selected through their site. */

@@ -158,13 +158,12 @@ export function weeklyEconomy(w: WorldState, rng: Rng): void {
 
     applyLoyalty(w, gang, paidFraction);
     if (paidFraction < 1 && gang.isPlayer) {
-      addMessage(
-        w,
-        'failed',
-        paidFraction === 0
-          ? 'Your people were not paid at all this week.'
-          : 'Your people received only half pay this week.',
-      );
+      const text = paidFraction === 0
+        ? 'Your people were not paid at all this week.'
+        : 'Your people received only half pay this week.';
+      // Settled after the week's last tick: the week log is what planning shows.
+      w.weekLog.push(text);
+      addMessage(w, 'failed', text);
     }
   }
 

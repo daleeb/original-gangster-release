@@ -19,6 +19,10 @@ import { yieldForInput } from '../yieldForInput';
 import { yieldForPaint } from '../yieldForPaint';
 import { captureTutorialProgress } from './tutorials';
 import { addOrderBlocks, toggleOrderBlock, toggleOrderSite } from './orderSelection';
+import { personMapPosition } from '../sim/mapIntel';
+
+/** Colour washes: the map draws one of these at a time. */
+const HEAT_OVERLAYS: readonly OverlayKind[] = ['landValue', 'crime', 'security', 'hostility', 'events'];
 
 export type Screen = 'menu' | 'newGame' | 'game' | 'gameOver' | 'halloFame';
 
@@ -155,6 +159,8 @@ interface GameState {
   selectTeam: (id: ID | null) => void;
   selectBuilding: (id: ID | null) => void;
   selectPerson: (id: ID | null) => void;
+  /** Select without opening a Tagged Window (the number keys cycling a crew). */
+  focusPerson: (id: ID | null) => void;
   tagPerson: (id: ID) => void;
   closeTaggedPerson: (id: ID) => void;
   clearTaggedWindows: () => void;
@@ -204,6 +210,8 @@ interface GameState {
   notify: (r: ApiResult | string | undefined) => void;
   clearToast: () => void;
   requestCamera: (p: (Vec2 & { zoom?: number }) | null) => void;
+  /** Centre the map on a person, where this gang's map can place him. */
+  centreOnPerson: (id: ID) => void;
 }
 
 /** An area selection the crew has not got the time for loses its farthest
@@ -319,6 +327,8 @@ export const useGame = create<GameState>((set, get) => ({
       ? { options: { ...newCampaignOptions(), seed: defaultGameOptions().seed, playerName: o.playerName, playerNickname: o.playerNickname,
           playerHeritage: o.playerHeritage, playerSitter: o.playerSitter, playerFemale: o.playerFemale,
           playerPortrait: o.playerPortrait, playerColor: o.playerColor } }
+      // Every new game gets a new city; the seed box can still bring one back.
+      : screen === 'newGame' ? { options: { ...o, seed: defaultGameOptions().seed } }
       : {};
     set({ screen, ...fresh, ...(screen !== 'game' ? { streetLoading: false } : {}) });
   },
@@ -530,9 +540,11 @@ export const useGame = create<GameState>((set, get) => ({
   },
   selectBuilding: (selectedBuildingId) => set({ selectedBuildingId, selectedPersonId: null }),
   selectPerson: (selectedPersonId) => {
-    set({ selectedPersonId, selectedBuildingId: null, selectedPersonIds: selectedPersonId != null ? [selectedPersonId] : [] });
+    get().focusPerson(selectedPersonId);
     if (selectedPersonId != null) get().tagPerson(selectedPersonId);
   },
+  focusPerson: (selectedPersonId) =>
+    set({ selectedPersonId, selectedBuildingId: null, selectedPersonIds: selectedPersonId != null ? [selectedPersonId] : [] }),
   tagPerson: (id) => {
     const {sim, taggedPersonIds} = get();
     const person = sim?.world.people[id];
@@ -595,7 +607,10 @@ export const useGame = create<GameState>((set, get) => ({
         overlays: cur.includes(o) ? cur : [...cur, o] });
       return;
     }
-    const next = cur.includes(o) ? cur.filter((x) => x !== o) : [...cur, o];
+    // The map draws one colour wash at a time, so turning one on turns the
+    // others off; territory and a lieutenant's area still stack on top.
+    const next = cur.includes(o) ? cur.filter((x) => x !== o)
+      : [...cur.filter((x) => !HEAT_OVERLAYS.includes(x) || !HEAT_OVERLAYS.includes(o)), o];
     set({ overlays: next });
   },
   setOverlays: (overlays) => set({ overlays,
@@ -706,8 +721,18 @@ export const useGame = create<GameState>((set, get) => ({
     const sim = state.sim;
     if (sim?.world.phase === 'gameOver' && state.screen === 'game') { get().bump(); return; }
     if (!sim || sim.world.phase !== 'week' || state.streetLoading || state.paused || state.finishingWeek || state.savingToQuit || state.savingSnapshot || state.loadingSave != null || state.screen !== 'game') return;
-    if (isFlatOut(state.speed)) sim.runFlatOut(FLAT_OUT_BUDGET_MS);
+    // A report the player asked to be slowed for drops time to normal on the
+    // tick it arrives, not when the HUD next redraws (up to 0.2 s of flat out).
+    const seen = sim.world.messages.at(-1)?.id ?? 0;
+    const reported = () => {
+      if (state.messageOverride || state.speed === 1) return false;
+      const messages = sim.world.messages;
+      for (let i = messages.length - 1; i >= 0 && messages[i].id > seen; i--) if (state.messageFilter[messages[i].category]) return true;
+      return false;
+    };
+    if (isFlatOut(state.speed)) sim.runFlatOut(FLAT_OUT_BUDGET_MS, reported);
     else sim.advance(seconds, state.speed, 8);
+    if (reported()) get().setSpeed(1);
     if (sim.world.phase !== 'week') {
       if (get().attract) {
         if (sim.world.phase === 'gameOver') get().endAttract();
@@ -793,6 +818,12 @@ export const useGame = create<GameState>((set, get) => ({
   },
   clearToast: () => set({ toast: null }),
   requestCamera: (cameraRequest) => set({ cameraRequest }),
+  centreOnPerson: (id) => {
+    const sim = get().sim, p = sim?.world.people[id];
+    if (!sim || !p) return;
+    const at = personMapPosition(sim.world, sim.playerGang.id, p);
+    if (at) get().requestCamera({ ...at }); else get().notify(`You do not know where ${p.name} is.`);
+  },
 }));
 
 /** Longest name a manual save may have (the disk store allows 200). */

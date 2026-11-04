@@ -229,7 +229,7 @@ function progressCases(w: WorldState, rng: Rng): void {
     });
     const friendlyJurors = c.jurorIds.filter((id) => {
       const j = w.people[id];
-      return j && (j.opinion[gang.id] ?? 0) > 25;
+      return j && j.status === 'active' && (j.opinion[gang.id] ?? 0) > 25;
     });
 
     let prosecution = c.strength * 0.6 + livingWitnesses.length * 12 + daSkill * 6 + gang.evidence * 0.25;

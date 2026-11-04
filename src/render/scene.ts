@@ -18,6 +18,7 @@ import { fireEscapeLevels } from './fireEscapeLayout';
 import { BLOCK_SIZE, CELL, GANG_COLORS, STREET_WIDTH } from '../sim/constants';
 import { BUILDING_BY_ID } from '../sim/data/buildings';
 import { buildingMapIntel, knownBlockOwners } from '../sim/mapIntel';
+import { recentEventCounts } from '../sim/events';
 import { drawTerritoryOutline } from './territoryOutline';
 import type { Block, Building, ID, Person, VehicleId, WorldState } from '../sim/types';
 import { MAX_CARS, carsAt } from '../sim/traffic';
@@ -1292,11 +1293,23 @@ export class CityRenderer {
         : `rgba(230, 90, 70, ${Math.min(0.45, (-avg / 100) * 0.6 + 0.08)})`;
     }
     if (this.overlays.includes('events')) {
-      const t = Math.min(1, blk.crimeHeat / 40);
-      if (t < 0.2) return null;
-      return `rgba(255, 220, 120, ${t * 0.4})`;
+      const t = Math.min(1, (this.recentEvents().get(blockId) ?? 0) / 4);
+      if (!t) return null;
+      return `rgba(255, 220, 120, ${0.12 + t * 0.33})`;
     }
     return null;
+  }
+
+  private recentEventsKey = '';
+  private recentEventsCache = new Map<ID, number>();
+  /** Recent Events by block, recounted only when a crime is filed or the week turns. */
+  private recentEvents(): Map<ID, number> {
+    const w = this.world, key = `${w.week}:${w.crimes.length}:${w.crimes.at(-1)?.id ?? -1}`;
+    if (key !== this.recentEventsKey) {
+      this.recentEventsKey = key;
+      this.recentEventsCache = recentEventCounts(w);
+    }
+    return this.recentEventsCache;
   }
 
   // ------------------------------------------------------------ buildings

@@ -224,6 +224,25 @@ export function blockAtPos(w: WorldState, pos: Vec2): number | null {
   return cityBlockAt(w, gx, gy)!.id;
 }
 
+/**
+ * The Recent Events overlay: reported crimes of this week and last, counted by
+ * the block they happened in (the premises', else the victim's or the
+ * perpetrator's). Charges laid at an arrest are not fresh events.
+ */
+export function recentEventCounts(w: WorldState): Map<ID, number> {
+  const counts = new Map<ID, number>();
+  for (const c of w.crimes) {
+    if (c.week < w.week - 1 || !c.reported || c.charge) continue;
+    const site = c.buildingId != null ? w.buildings[c.buildingId] : null;
+    const pos = site ? null : (c.victimId != null ? w.people[c.victimId] : null)?.pos ?? w.people[c.perpetratorId]?.pos;
+    const raw = site ? site.blockId : pos ? blockAtPos(w, pos) : null;
+    if (raw == null) continue;
+    const id = w.blocks[raw]?.layout?.mergedInto ?? raw;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return counts;
+}
+
 /** Shift the opinion of everyone in an area toward or against a gang. */
 export function shiftLocalOpinion(
   w: WorldState,

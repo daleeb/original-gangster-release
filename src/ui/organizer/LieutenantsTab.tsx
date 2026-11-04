@@ -440,7 +440,7 @@ function ReportsPanel({ teamId }: { teamId: ID }) {
   const sim = useGame((s) => s.sim)!;
   useEffect(() => { useGame.getState().recordTutorialVisit('reportsViewed'); }, [sim, sim.world.week]);
   const notify = useGame((s) => s.notify);
-  const requestCamera = useGame((s) => s.requestCamera);
+  const centreOnPerson = useGame((s) => s.centreOnPerson);
   const w = sim.world;
   const gang = sim.playerGang;
 
@@ -517,11 +517,13 @@ function ReportsPanel({ teamId }: { teamId: ID }) {
       {deaths.length === 0 ? (
         <Empty>A quiet week.</Empty>
       ) : (
-        deaths.slice(-10).map((d, i) => (
-          <div key={i} className="tiny" style={{ padding: '2px 0' }}>
-            · {d}
-          </div>
-        ))
+        <div className="scroll-list" style={{ maxHeight: 160 }}>
+          {deaths.map((d, i) => (
+            <div key={i} className="tiny" style={{ padding: '2px 0' }}>
+              · {d}
+            </div>
+          ))}
+        </div>
       )}
 
       <Kicker style={{ margin: '12px 0 4px' }}>Other gangs seen</Kicker>
@@ -529,7 +531,7 @@ function ReportsPanel({ teamId }: { teamId: ID }) {
         <Empty>You know nothing of your rivals' people. Explore, or buy from a snitch.</Empty>
       ) : (
         seen.map((p) => (
-          <button key={p.id} className="list-row" onClick={() => requestCamera({ x: p.pos.x, y: p.pos.y })}>
+          <button key={p.id} className="list-row" onClick={() => centreOnPerson(p.id)}>
             <span className="name">{p.name}</span>
             <span className="muted">{w.gangs[p.gangId!]?.name}</span>
           </button>

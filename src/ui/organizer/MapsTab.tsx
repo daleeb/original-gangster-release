@@ -13,7 +13,7 @@ const OVERLAYS: { id: OverlayKind; label: string; help: string }[] = [
   { id: 'security', label: 'Security', help: 'Where the police are thickest.' },
   { id: 'hostility', label: 'Hostility', help: 'How the people on each block feel about you.' },
   { id: 'crime', label: 'Crime Hot Spots', help: 'Where the violence has been.' },
-  { id: 'events', label: 'Recent Events', help: 'The worst of last week.' },
+  { id: 'events', label: 'Recent Events', help: 'Crimes reported this week and last.' },
 ];
 
 export function MapsTab() {

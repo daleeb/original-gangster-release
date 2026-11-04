@@ -18,7 +18,7 @@ import { weeklyTaxes } from './systems/taxes';
 import { buildingValue, releaseGangHoldings, standingBlocks } from './execution';
 import { MINUTES_PER_SECOND, MINUTES_PER_WEEK, ORDERS } from './constants';
 import { addMessage, addNews } from './events';
-import { beginWeekOrders, disbandTeam, promoteToLieutenant, tickOrders } from './execution';
+import { beginWeekOrders, disbandTeam, promoteToLieutenant, replaceLieutenant, tickOrders } from './execution';
 import { Rng } from './rng';
 import { allocateWeapons } from './weapons';
 import { tickAmbient } from './systems/ambient';
@@ -226,7 +226,7 @@ export class Sim {
    * whole ticks as fit in the frame's budget (its busy loop). Nothing is
    * banked for later frames, so slowing down takes effect at once.
    */
-  runFlatOut(budgetMs: number): void {
+  runFlatOut(budgetMs: number, stop?: () => boolean): void {
     const w = this.world;
     if (w.phase !== 'week') return;
     if (w.settlementStage != null) { this.endWeekStep(); w.rngState = this.rng.state; return; }
@@ -234,7 +234,7 @@ export class Sim {
     const deadline = performance.now() + budgetMs;
     do {
       this.tickOnce(true);
-      if (w.phase !== 'week' || w.settlementStage != null) break;
+      if (w.phase !== 'week' || w.settlementStage != null || stop?.()) break;
     } while (performance.now() < deadline);
     w.rngState = this.rng.state;
   }
@@ -445,6 +445,8 @@ export class Sim {
     for (const p of peopleList(w)) {
       p.streetOrder = null;
       if (p.status === 'beaten') p.status = 'active';
+      delete p.beatenUntil;
+      delete p.resumeOrderId;
       if (p.status !== 'dead') p.hp = Math.min(100, p.hp + 35);
     }
   }
@@ -487,7 +489,7 @@ export class Sim {
     const w = this.world;
     recordScorePeaks(w);
     for (const gang of Object.values(w.gangs)) {
-      const crimes = w.crimes.filter((c) => c.week === w.week && c.gangId === gang.id).length;
+      const crimes = w.crimes.filter((c) => c.week === w.week && c.gangId === gang.id && !c.charge).length;
       gang.history.push({
         week: w.week,
         power: powerRating(w, gang),
@@ -519,31 +521,7 @@ export class Sim {
       for (const t of teamsOf(w, gang)) {
         const lt = w.people[t.lieutenantId];
         const away = !lt || lt.status === 'dead' || lt.status === 'jailed' || lt.status === 'kidnapped';
-        if (!away) continue;
-        const stand = t.memberIds
-          .map((id) => w.people[id])
-          .filter((p) => p && p.status === 'active')
-          .sort(
-            (a, b) =>
-              b.skills.organization + b.skills.intelligence - (a.skills.organization + a.skills.intelligence),
-          )[0];
-        if (!stand) {
-          // Nobody left to lead it. A crew with a dead lieutenant and no
-          // members would otherwise sit there forever holding a slot.
-          if (!lt || lt.status === 'dead') disbandTeam(w, gang, t.id, false);
-          continue;
-        }
-        t.memberIds = t.memberIds.filter((id) => id !== stand.id);
-        if (lt && lt.status !== 'dead') {
-          // The old boss of the crew keeps his place in it until he is back.
-          lt.role = 'hood';
-          if (!t.memberIds.includes(lt.id)) t.memberIds.push(lt.id);
-        }
-        stand.role = 'lieutenant';
-        stand.teamId = t.id;
-        t.lieutenantId = stand.id;
-        t.name = `${stand.name.split(' ')[0]}'s Crew`;
-        w.weekLog.push(`${stand.name} has taken over the crew for ${gang.name}.`);
+        if (away) replaceLieutenant(w, gang, t);
       }
 
       const liveTeams = teamsOf(w, gang).filter((t) => {

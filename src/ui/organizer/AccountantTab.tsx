@@ -15,6 +15,7 @@ import { reservedAudit, specialistTargetEligible } from '../../sim/specialistJob
 import { Avatar, ConfirmDialog, Empty, Hint, Meter, Panel, Pill, Stars } from '../common';
 import { SpecialistJobList } from '../SpecialistJobCard';
 import { peopleList } from '../../sim/entityLists';
+import { taxNotCoveredUp } from '../../sim/systems/taxes';
 
 export function AccountantTab() {
   const sim = useGame((s) => s.sim)!;
@@ -223,7 +224,9 @@ export function AccountantTab() {
       </Panel>
 
       <Panel title="Tax Evasion — Last 8 Weeks">
-        <Hint>Your accountant uses the previous week's legal income to hide tax and cover earlier shortfalls. Uncovered amounts remain a risk if the accountant is arrested, even after dismissal.</Hint>
+        <Hint>{w.cityLayout?.original
+          ? 'Held-back tax waits until your accountant launders it against business takings. Above $2,000 it draws the FBI to your premises.'
+          : 'Your accountant uses the previous week\'s legal income to hide tax and cover earlier shortfalls. Uncovered amounts remain a risk if the accountant is arrested, even after dismissal.'}</Hint>
         {gang.taxEvaded.length === 0 ? (
           <Empty>Nothing has been held back.</Empty>
         ) : (
@@ -237,7 +240,7 @@ export function AccountantTab() {
             </div>
             <div className="row between tiny" style={{ marginTop: 7 }}>
               <span>Not yet covered up</span>
-              <b style={{ color: 'var(--blood)' }}>{money(gang.uncoveredTax)}</b>
+              <b style={{ color: 'var(--blood)' }}>{money(taxNotCoveredUp(w, gang))}</b>
             </div>
           </>
         )}

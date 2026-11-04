@@ -2429,6 +2429,26 @@
             ]
           }
         },
+        "beatenUntil": {
+          "optional": true,
+          "shape": {
+            "union": [
+              {
+                "type": "number"
+              }
+            ]
+          }
+        },
+        "resumeOrderId": {
+          "optional": true,
+          "shape": {
+            "union": [
+              {
+                "type": "number"
+              }
+            ]
+          }
+        },
         "tram": {
           "optional": true,
           "shape": {

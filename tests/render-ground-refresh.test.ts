@@ -15,7 +15,7 @@ function fixture(overlays: OverlayKind[] = ['territory']) {
       ownerGangId: null, protection: null, isHQ: false, ownerPersonId: i + 10, knowledge: { 0: 3, 1: 3 },
     }])),
     people: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [i + 10, { opinion: { 0: 10, 1: -20 } }])),
-    gangs: { 0: { color: 'red', teamIds: [] }, 1: { color: 'blue', teamIds: [] } }, teams: {},
+    gangs: { 0: { color: 'red', teamIds: [] }, 1: { color: 'blue', teamIds: [] } }, teams: {}, crimes: [],
   } as unknown as WorldState;
   const drawGround = vi.fn(), refreshBuildings = vi.fn();
   const city = Object.assign(Object.create(CityRenderer.prototype), {
@@ -86,6 +86,7 @@ describe('road texture invalidation', () => {
   it.each(['crime', 'security', 'events'] as const)('tracks fractional %s wash changes', overlay => {
     const f = fixture([overlay]);
     if (overlay === 'security') f.world.blocks[0].policePresence += .1;
+    else if (overlay === 'events') f.world.crimes.push({ id: 1, week: 1, reported: true, buildingId: 0 } as WorldState['crimes'][number]);
     else f.world.blocks[0].crimeHeat += .1;
     f.redraw();
     expect(f.drawGround).toHaveBeenCalledTimes(2);

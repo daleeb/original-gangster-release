@@ -682,8 +682,8 @@ export function memberWarrants(w: WorldState, rng: Rng): Person[] {
 /** 0x4F5860: the Opponents setting weighs a gang's premises takings. */
 function opponentsFactor(w: WorldState, gang: Gang): number {
   const o = w.options.opponents;
-  if (gang.isPlayer) return o === 'passive' ? 16 : o === 'random' ? 8 : 10;
-  return o === 'random' ? 14 : 10;
+  if (gang.isPlayer) return o === 'passive' ? 16 : o === 'aggressive' ? 8 : 10;
+  return o === 'aggressive' ? 14 : 10;
 }
 
 /**

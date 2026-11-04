@@ -131,6 +131,8 @@ describe('planning map selection', () => {
     const w = sim.world, g = sim.playerGang;
     const warehouse = Object.values(w.buildings).find(b => b.typeId === 'warehouse')!; warehouse.ownerGangId = g.id;
     if(type==='export')w.teams[g.teamIds[0]].vehicles.truck=1;
+    // The API refuses what the gang cannot pay for or carry out (B#15).
+    g.cash = 1_000_000; g.weapons.explosives = 1;
     begin(type);
     if (type === 'setUpBusiness') state().updateJobOpts({ businessTypeId: 'cafe' });
     const sites = Object.values(w.buildings).filter(b => selectableOrderSite(w, g.id, card(), b) && (type !== 'setUpBusiness' || w.lots[b.lotId].index !== 4));

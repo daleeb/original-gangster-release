@@ -11,7 +11,7 @@ import { peopleList, buildingList } from '../entityLists';
 
 /** Turn the week's events into the morning edition. */
 export function weeklyNews(w: WorldState, _rng: Rng): void {
-  const thisWeek = w.crimes.filter((c) => c.week === w.week && c.reported);
+  const thisWeek = w.crimes.filter((c) => c.week === w.week && c.reported && !c.charge);
 
   // ---- crimes
   const countedVictims = new Set<number>();
@@ -22,7 +22,7 @@ export function weeklyNews(w: WorldState, _rng: Rng): void {
     countedVictims.add(victim.id);
     return true;
   });
-  const fires = thisWeek.filter((c) => !c.charge && (c.kind === 'torch' || c.kind === 'bomb'));
+  const fires = thisWeek.filter((c) => c.kind === 'torch' || c.kind === 'bomb');
   if (murders.length) {
     addNews(w, {
       section: 'crime',

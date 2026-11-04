@@ -95,10 +95,11 @@ export function BuildingPanel() {
               </b>
             </div>
           )}
-          {owner && knowledge >= 2 && (
+          {/* A bought site keeps its seller as occupant: the owner is the gang. */}
+          {(intel.ownerGangId != null || owner && knowledge >= 2 && b.ownerGangId == null) && (
             <div className="kv">
               <span>Owner</span>
-              <b>{owner.name}</b>
+              <b>{intel.ownerGangId != null ? w.gangs[intel.ownerGangId]?.name : owner!.name}</b>
             </div>
           )}
           {knowledge >= 3 && !mine && t && (

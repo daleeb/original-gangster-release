@@ -489,8 +489,30 @@ export function beginWeekOrders(w: WorldState): void {
 
 // ---------------------------------------------------------------- tick
 
+/** A street order finished: its men go back to the planned order it interrupted. */
+function rejoinPlannedOrders(w: WorldState): void {
+  for (const p of peopleList(w)) {
+    if (p.resumeOrderId == null || p.streetOrder) continue;
+    const order = w.orders[p.resumeOrderId];
+    delete p.resumeOrderId;
+    if (p.status !== 'active' || p.orderId != null || !order || !order.assignedIds.includes(p.id) ||
+      !['travelling', 'executing', 'waiting'].includes(order.state)) continue;
+    p.orderId = order.id;
+    const tp = targetPos(w, order);
+    if (!tp || order.state === 'waiting') continue;
+    // Back on his own, he walks to the job before the work goes on.
+    if (order.state === 'executing' && !ORDERS[order.type].wholeWeek && orderActors(w, order).length === 1) order.state = 'travelling';
+    setDestination(w, p, tp);
+  }
+}
+
+/** Someone taken off this order for a street order is still coming back to it. */
+const awaitingStreetCrew = (w: WorldState, order: Order) =>
+  order.assignedIds.some((id) => w.people[id]?.resumeOrderId === order.id && w.people[id].status === 'active');
+
 export function tickOrders(w: WorldState, rng: Rng, minutes: number, loadout: Loadout = allocateWeapons(w)): void {
   reconcileTransport(w);
+  rejoinPlannedOrders(w);
   for (const team of Object.values(w.teams)) {
     let freedSomething = false;
 
@@ -502,6 +524,7 @@ export function tickOrders(w: WorldState, rng: Rng, minutes: number, loadout: Lo
       if (order.state === 'queued') continue;
 
       const actors = orderActors(w, order);
+      if (!actors.length && awaitingStreetCrew(w, order)) continue;
       if (!actors.length) {
         recoverExportGoods(w, order, true);
         finishOrder(w, order, order.failReason ?? 'Nobody was left to carry out the order.');
@@ -985,6 +1008,8 @@ function resolveTarget(
       const seller = building.ownerPersonId != null ? w.people[building.ownerPersonId] : null;
       if (seller) setAttitude(seller, gang.id, { hostility: hostilityOf(seller, gang.id) >> 1, fear: fearOf(seller, gang.id) - 64 });
       building.ownerGangId = gang.id;
+      // One controller per site: buying the premises ends any racket on them.
+      building.protection = null;
       building.knowledge[gang.id] = 4;
       if (building.cls !== 'empty' && building.state !== 'damaged' && building.fbiClosedWeek == null) {
         building.state = 'trading';
@@ -1513,11 +1538,8 @@ function resolveTarget(
           say(`${victim.name} died from the beating. That is a murder charge.`);
           report(w, gang.id, 'combat', `${victim.name} was killed during an assault.`, victim.pos, victim.id);
         } else {
-          victim.status = 'beaten';
           victim.hp = Math.max(5, victim.hp - 45);
-          victim.orderId = null;
-          victim.streetOrder = null;
-          clearDestination(victim);
+          knockDown(w, victim);
           // Assault victim (recode reading): fear +32, hostility −16.
           opinionShift(victim, gang.id, -25, { hostility: -16, fear: 32 });
           if (victim.role === 'owner' && victim.buildingId != null) {
@@ -1643,11 +1665,8 @@ function resolveTarget(
         victimId: victim.id,
       });
       if (success && beating) {
-        victim.status = 'beaten';
         victim.hp = Math.max(5, victim.hp - 45);
-        victim.orderId = null;
-        victim.streetOrder = null;
-        clearDestination(victim);
+        knockDown(w, victim);
         opinionShift(victim, gang.id, -25, { hostility: -16, fear: 32 });
         say(`Without a gun it came down to fists: ${victim.name} took a beating.`);
         blastAtVictim(w, gang.id, victim, BLAST_DAMAGE.assault);
@@ -1781,6 +1800,11 @@ export function killPerson(w: WorldState, p: Person, reason: string): void {
   for (const t of Object.values(w.teams)) {
     t.memberIds = t.memberIds.filter((id) => id !== p.id);
   }
+  // His crew gets a new lieutenant now, not at the end of the week.
+  for (const t of Object.values(w.teams)) {
+    const gang = w.gangs[t.gangId];
+    if (t.lieutenantId === p.id && gang) replaceLieutenant(w, gang, t);
+  }
   p.teamId = null;
   p.capturedBy = null;
   p.interrogationValue = 0;
@@ -1800,6 +1824,65 @@ export function killPerson(w: WorldState, p: Person, reason: string): void {
   w.snitchIds = w.snitchIds.filter((id) => id !== p.id);
 
   w.weekLog.push(`${p.name} ${reason}.`);
+}
+
+/** How long a beating keeps a man down before he gets up on his own. */
+export const BEATEN_MINUTES = 120;
+
+/** A beaten man drops what he was doing and stays down for a while. */
+export function knockDown(w: WorldState, victim: Person): void {
+  victim.status = 'beaten';
+  victim.orderId = null;
+  victim.streetOrder = null;
+  clearDestination(victim);
+  victim.beatenUntil = w.week * MINUTES_PER_WEEK + w.minute + BEATEN_MINUTES;
+}
+
+/**
+ * A promoted man is paid what he asks as a lieutenant. Original city
+ * (0x460870, 0x67F479–0x67F491): his lieutenant quote when it is more than $20
+ * above his demand, else his demand; pay and demand are both set to it.
+ */
+export function setLieutenantPay(w: WorldState, gang: Gang, hood: Person): void {
+  if (w.cityLayout?.original) {
+    const quote = originalWageQuote(hood, gang.id);
+    if (quote > hood.payDemand + 20) hood.payDemand = quote;
+  } else hood.payDemand = Math.max(hood.payDemand, hoodPayDemand(hood, 'lieutenant'));
+  hood.pay = hood.payDemand;
+}
+
+/**
+ * A crew whose lieutenant is dead, jailed or kidnapped goes to its best active
+ * member and keeps its orders. With nobody to take it, a crew whose lieutenant
+ * is dead is disbanded.
+ */
+export function replaceLieutenant(w: WorldState, gang: Gang, t: Team): void {
+  const lt = w.people[t.lieutenantId];
+  const stand = t.memberIds
+    .map((id) => w.people[id])
+    .filter((p) => p && p.status === 'active')
+    .sort(
+      (a, b) =>
+        b.skills.organization + b.skills.intelligence - (a.skills.organization + a.skills.intelligence),
+    )[0];
+  if (!stand) {
+    // Nobody left to lead it. A crew with a dead lieutenant and no
+    // members would otherwise sit there forever holding a slot.
+    if (!lt || lt.status === 'dead') disbandTeam(w, gang, t.id, false);
+    return;
+  }
+  t.memberIds = t.memberIds.filter((id) => id !== stand.id);
+  if (lt && lt.status !== 'dead') {
+    // The old boss of the crew keeps his place in it until he is back.
+    lt.role = 'hood';
+    if (!t.memberIds.includes(lt.id)) t.memberIds.push(lt.id);
+  }
+  stand.role = 'lieutenant';
+  stand.teamId = t.id;
+  setLieutenantPay(w, gang, stand);
+  t.lieutenantId = stand.id;
+  t.name = `${stand.name.split(' ')[0]}'s Crew`;
+  w.weekLog.push(`${stand.name} has taken over the crew for ${gang.name}.`);
 }
 
 /** Disband a crew: return its people and delete the orders it was carrying. */
@@ -1860,8 +1943,7 @@ export function promoteToLieutenant(w: WorldState, gang: Gang, hood: Person): Te
   }
   gang.poolIds = gang.poolIds.filter((id) => id !== hood.id);
   hood.role = 'lieutenant';
-  hood.payDemand = hoodPayDemand(hood, 'lieutenant');
-  if (w.cityLayout?.original) hood.payDemand = Math.max(hood.pay, originalWageQuote(hood, gang.id));
+  setLieutenantPay(w, gang, hood);
   const team: Team = {
     id: newId(w),
     gangId: gang.id,

@@ -126,8 +126,10 @@ export function WeekHud() {
           <InterfaceButton label="Clear Tagged Windows" glyph="×" caption="Untag" disabled={!taggedIds.length} onClick={()=>state().clearTaggedWindows()}/>
         </div>
         <div className="interface-control-group" aria-label="View options">
-          {view==='plan' ? <>{OVERLAYS.map(o=><InterfaceButton key={o.id} label={o.label} icon={`overlays/${o.id}`} caption={o.caption} aria-pressed={overlays.includes(o.id)} onClick={()=>state().toggleOverlay(o.id)}/>)}
-            <InterfaceButton label="Clear overlays" glyph="∅" caption="Clear" onClick={()=>state().setOverlays([])}/></> : <>
+          {/* The ground wash shows from the rooftops too; only the street is too close for it. */}
+          {view!=='street' && <>{OVERLAYS.map(o=><InterfaceButton key={o.id} label={o.label} icon={`overlays/${o.id}`} caption={o.caption} aria-pressed={overlays.includes(o.id)} onClick={()=>state().toggleOverlay(o.id)}/>)}
+            <InterfaceButton label="Clear overlays" glyph="∅" caption="Clear" onClick={()=>state().setOverlays([])}/></>}
+          {view!=='plan' && <>
             <InterfaceButton label="Reverse view" glyph="↔" caption="Reverse" aria-pressed={flipped} title="Reverse view (F)" onClick={()=>cameraApi.ref?.flipView()}/>
             <InterfaceButton label={removed?'Restore buildings':'Remove buildings'} icon="orders/buyPremises" caption={removed?'Restore':'Remove'} aria-pressed={removed} title="Remove or restore buildings (B)" onClick={()=>cameraApi.ref?.toggleBuildingsRemoved()}/>
             <InterfaceButton label="Automatic cutaway" icon="orders/setUpBusiness" caption="Cutaway" aria-pressed={autoCut} onClick={()=>state().setAutoLowerRoofs(!autoCut)}/>
