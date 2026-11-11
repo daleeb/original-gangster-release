@@ -22,6 +22,10 @@ export function GraphsTab() {
   const [metric, setMetric] = useState<Metric>('power');
   const [allGangs, setAllGangs] = useState(true);
   const [bars, setBars] = useState(false);
+  // With the Bureau's gauges hidden its graph goes too.
+  const bureauGauges = useGame((s) => s.bureauGauges);
+  const metrics = bureauGauges ? METRICS : METRICS.filter((m) => m.id !== 'suspicion');
+  if (!bureauGauges && metric === 'suspicion') setMetric('power');
 
   const w = sim.world;
   const player = sim.playerGang;
@@ -49,7 +53,7 @@ export function GraphsTab() {
     <div>
       <Panel title="Graph Reports">
         <div className="row wrap" style={{ gap: 4, marginBottom: 8 }}>
-          {METRICS.map((m) => (
+          {metrics.map((m) => (
             <button key={m.id} aria-pressed={metric === m.id} className={`btn sm${metric === m.id ? ' on' : ''}`} onClick={() => setMetric(m.id)}>
               {m.label}
             </button>

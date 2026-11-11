@@ -55,6 +55,16 @@ export function adviseOn(w: WorldState, gangId: number): Advice[] {
       text: 'The Bureau is close. Buy legal businesses to soak up the money you cannot explain, or stop your illegal sites trading for a week.',
     });
   }
+  // Guns in the cache arm nobody in a crew: say so before an unarmed crew is sent out.
+  const spare = Object.entries(gang.weapons).reduce((n, [id, count]) => n + (id === 'explosives' ? 0 : count), 0);
+  const unarmed = gang.teamIds.map((id) => w.teams[id]).find((t) => t &&
+    Object.entries(t.weapons).every(([id, count]) => id === 'explosives' || !count));
+  if (spare > 0 && unarmed) {
+    out.push({
+      urgency: 'normal',
+      text: `${w.people[unarmed.lieutenantId]?.name ?? 'A lieutenant'}'s crew carries no guns, and there ${spare === 1 ? 'is one' : `are ${spare}`} in the cache. Open Weapons and send some across (→ Team) before they go out.`,
+    });
+  }
   const inTrouble = Object.values(w.cases).filter(
     (c) => c.gangId === gangId && (c.status === 'awaiting' || c.status === 'onTrial'),
   );

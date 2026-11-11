@@ -184,6 +184,9 @@ describe('planned orders produce real gameplay outcomes', () => {
       const cash = s.gang.cash;
       const order = run(s, { type: 'raid', buildingIds: [site.id] }, true);
       const goods = Object.values(warehouse.stock).reduce((a, b) => a + b, 0);
+      // The courier can be shot by a rival on the way back (the city is live):
+      // that seed says nothing about delivery, which cargo tests cover.
+      if (order.results.includes('The raided goods were lost.')) continue;
       if (order.results.some(line => line.startsWith('Raided '))) {
         successes++;
         expect(s.gang.cash).toBeGreaterThan(cash);
@@ -269,7 +272,8 @@ describe('planned orders produce real gameplay outcomes', () => {
       const s = fixture(seed);
       const site = allBuildings(s.w).find(b => b.cls === 'commercial' && b.ownerGangId == null && b.state === 'trading')!;
       const previousRepair = site.repairCost;
-      const order = run(s, { type: 'smashUp', buildingIds: [site.id] });
+      // A failed roll ends the order failed; its consequences are checked below.
+      const order = run(s, { type: 'smashUp', buildingIds: [site.id] }, true);
       if (order.results.some(line => line.startsWith('Wrecked '))) {
         successes++;
         expect(site.state).toBe('damaged'); expect(site.repairCost).toBeGreaterThan(0);

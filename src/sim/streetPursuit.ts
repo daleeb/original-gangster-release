@@ -1,7 +1,7 @@
 import { WALK_SPEED } from './constants';
 import { clearDestination, setDestination } from './movement';
 import { alight } from './transport';
-import type { Person, WorldState } from './types';
+import type { Person, Vec2, WorldState } from './types';
 import { roadPosition } from './vehicleNavigation';
 import { attackProfile, UNARMED, type Loadout } from './weapons';
 import { dist } from './world';
@@ -14,6 +14,24 @@ export function streetOrderRange(p: Person, loadout: Loadout): number {
  * (A fixed 12 m was one minute's walk before the clock took the original's
  * pace; at 0.54 m a minute it left pursuers chasing stale points for ~20 min.) */
 export const PURSUIT_REPLAN_M = Math.max(1.5, WALK_SPEED * 2);
+
+/**
+ * Turn a pursuer toward where his man now is without throwing away the leg he
+ * is on. A pavement route always begins at the nearest corner, which is often
+ * the one behind him: planned afresh each time the target moved, he walked back
+ * to that corner over and over (pacing one block face while the target ambled
+ * off). So he keeps heading for his next waypoint when it is a crossing or
+ * brings him closer, and the new route is taken up from there.
+ */
+export function replanPursuit(w: WorldState, p: Person, to: Vec2): void {
+  const next = p.dest ? p.path[0] : undefined;
+  if (next && (next.cross || dist(next, to) < dist(p.pos, to))) {
+    const route = { ...p, pos: { x: next.x, y: next.y } };
+    setDestination(w, route, to);
+    p.dest = route.dest;
+    p.path = [{ ...next }, ...route.path];
+  } else setDestination(w, p, to);
+}
 
 /** Keep a pursuit's route until its target moves. Restarting a pavement route
  * every minute sends the walker back to the same junction indefinitely. */
@@ -41,13 +59,7 @@ export function prepareStreetPursuit(w: WorldState, p: Person, target: Person, r
     // Keep heading for the next waypoint when it is a crossing or brings him
     // closer; otherwise re-plan from where he stands, since that waypoint
     // would turn him back just as he is closing in.
-    const next = p.path[0];
-    if (next && (next.cross || dist(next,target.pos) < dist(p.pos,target.pos))) {
-      const route = {...p, pos:{x:next.x,y:next.y}};
-      setDestination(w,route,target.pos);
-      p.dest = route.dest;
-      p.path = [{...next},...route.path];
-    } else setDestination(w,p,target.pos);
+    replanPursuit(w, p, target.pos);
     order.pos = {...target.pos};
   } else if (!order.pos) {
     // Historical saves did not store the position used for the pursuit.

@@ -139,7 +139,6 @@ export function MainMenu() {
   return (
     <div className="scene scene-casino">
       <div className="scene-light" aria-hidden="true" />
-      <div className="scene-version" aria-label={`Version ${__APP_VERSION__}`}>v{__APP_VERSION__}</div>
       <h1 className="scene-title">
         <ArtImage src={art('brand/wordmark.png')} alt="Original Gangster" draggable={false} />
       </h1>

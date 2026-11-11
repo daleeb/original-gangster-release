@@ -433,7 +433,7 @@ export class Sim {
       } else {
         order.state = 'failed';
         order.failReason = order.failReason ?? (neverStarted
-          ? `The order never started. ${order.dispatchWaitReason ?? 'No crew was available before the week ended.'}`
+          ? `The order never started: the crew was still busy with earlier orders when the week ended. ${order.dispatchWaitReason ?? ''}`.trim()
           : 'There was not enough time in the week to perform the order.');
       }
       delete order.dispatchWaitReason;

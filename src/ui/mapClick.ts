@@ -1,6 +1,7 @@
 import { act, useGame } from '../app/store';
 import type { PickResult } from '../render/scene';
-import { allocateBlocks, issueStreetOrder } from '../sim/api';
+import { BUY_REACH_BLOCKS, CENTRE_LOT_NEEDS_FRONT, allocateBlocks, issueStreetOrder, nearTerritory } from '../sim/api';
+import { centreLotNeedsFront, purchasablePremisesType, siteBuilding } from '../sim/premises';
 import { ORDERS } from '../sim/constants';
 import { VIEW_ZOOM } from '../render/viewModes';
 import type { ID } from '../sim/types';
@@ -28,6 +29,9 @@ export function handleMapHit(hit: PickResult, opts: MapClickOptions = {}): void 
   const s = state.sim;
   if (!s) return;
   const mode = state.pickMode;
+  // The terraces of an apartment block are part of it: a click on one is a click on the block's tenement.
+  const clicked = hit.buildingId != null ? s.world.buildings[hit.buildingId] : undefined;
+  if (clicked) hit = { ...hit, buildingId: siteBuilding(s.world, clicked).id };
 
   // `point` is only meaningful when something in the city was actually hit;
   // a click on the sky leaves it at the map origin.
@@ -54,6 +58,15 @@ export function handleMapHit(hit: PickResult, opts: MapClickOptions = {}): void 
         if (hit.buildingId != null && s.world.buildings[hit.buildingId] &&
           selectableOrderSite(s.world, s.playerGang.id, state.jobCard, s.world.buildings[hit.buildingId]))
           state.updateJobCard({ buildingIds: [hit.buildingId] });
+        else if (hit.buildingId != null && state.jobCard.type === 'buyPremises') {
+          // A site that looks for sale and is not: say which rule is in the way.
+          const site = s.world.buildings[hit.buildingId];
+          if (site && site.ownerGangId == null && site.state !== 'destroyed' && purchasablePremisesType(site)) {
+            if (centreLotNeedsFront(s.world, s.playerGang.id, site)) state.notify({ ok: false, error: CENTRE_LOT_NEEDS_FRONT });
+            else if (!nearTerritory(s.world, s.playerGang.id, site.blockId, BUY_REACH_BLOCKS))
+              state.notify({ ok: false, error: `Too far from your territory: you can only buy within ${BUY_REACH_BLOCKS} blocks of it.` });
+          }
+        }
         break;
       case 'area':
         // A click takes the whole block; a shift-click takes just the one site.

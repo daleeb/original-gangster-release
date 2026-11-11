@@ -53,7 +53,7 @@ describe('requested manpower and actual dispatch', () => {
     expect(order.assignedIds).toEqual(s.t.memberIds);
   });
 
-  it('waits for the entire requested party, including the return journey, before starting the next job', () => {
+  it('waits for the entire requested party, then turns the returning man round for the next job', () => {
     const s = fixture();
     expect(moveToTeam(s.w, s.g.id, s.g.poolIds[0], s.t.id).ok).toBe(true);
     const charity = Object.values(s.w.buildings).find(b => b.cls === 'charity')!;
@@ -65,9 +65,10 @@ describe('requested manpower and actual dispatch', () => {
     expect(second.dispatchWaitReason).toMatch(/3 people; 2 are free/);
     const returning = s.w.people[first.assignedIds[0]];
     advanceUntil(s.sim, () => first.state === 'done');
-    expect(returning.dest).not.toBeNull();
-    expect(second.state).toBe('queued');
-    advanceUntil(s.sim, () => second.state !== 'queued');
+    // As in the original he goes straight on to the next job: he is not made
+    // to walk back to the office first while the queued order waits.
+    expect(second.state).not.toBe('queued');
+    expect(returning.orderId).toBe(second.id);
     expect(second.assignedIds).toHaveLength(3);
     expect(second.assignedIds).toContain(returning.id);
     expect(second.dispatchWaitReason).toBeUndefined();

@@ -1,4 +1,4 @@
-import { BUY_REACH_BLOCKS, defaultOptions, nearTerritory, validBuildingTarget } from '../sim/api';
+import { BUY_REACH_BLOCKS, defaultOptions, nearTerritory, siteAlreadyOrdered, validBuildingTarget } from '../sim/api';
 import { ORDERS } from '../sim/constants';
 import { expandTargets, isValidAreaTarget } from '../sim/execution';
 import { buildingMapIntel } from '../sim/mapIntel';
@@ -7,9 +7,11 @@ import type { JobCard } from './store';
 import { peopleList, buildingList } from '../sim/entityLists';
 
 /** Map/clipboard candidates share the order rules without spending time or IDs. */
-export function selectableOrderSite(w: WorldState, gangId: ID, card: Pick<JobCard, 'type' | 'opts'>, b: Building): boolean {
+export function selectableOrderSite(w: WorldState, gangId: ID, card: Pick<JobCard, 'type' | 'opts'> & { editingOrderId?: ID }, b: Building): boolean {
   if (!buildingMapIntel(b, gangId).siteKnown || b.state === 'destroyed') return false;
-  if (ORDERS[card.type].target === 'area') return isValidAreaTarget(w, gangId, card.type, b);
+  // Already on this week's books for the same job (the order being edited aside).
+  if (siteAlreadyOrdered(w, gangId, card.type, b.id, card.editingOrderId)) return false;
+  if (ORDERS[card.type].target === 'area') return isValidAreaTarget(w, gangId, card.type, b, card.opts);
   if (ORDERS[card.type].target !== 'building') return false;
   // Choose the premises first, then configure its business and front on the card.
   if (card.type === 'setUpBusiness') return b.ownerGangId === gangId;
@@ -46,14 +48,14 @@ export function orderPeopleBySite(w: WorldState, gangId: ID, type: OrderType): M
   return result;
 }
 
-export function blockOrderSites(w: WorldState, gangId: ID, card: Pick<JobCard, 'type' | 'opts'>, id: ID): ID[] {
+export function blockOrderSites(w: WorldState, gangId: ID, card: Pick<JobCard, 'type' | 'opts'> & { editingOrderId?: ID }, id: ID): ID[] {
   const block = w.blocks[w.blocks[id]?.layout?.mergedInto ?? id];
   return (block?.lotIds ?? []).map(l => w.buildings[w.lots[l].buildingId])
     .filter(b => b && selectableOrderSite(w, gangId, card, b)).map(b => b.id);
 }
 
 export function selectedOrderSites(w: WorldState, gangId: ID, card: JobCard): ID[] {
-  return expandTargets(w, gangId, card.type, card.blockIds, card.buildingIds)
+  return expandTargets(w, gangId, card.type, card.blockIds, card.buildingIds, card.opts)
     .filter(id => w.buildings[id] && selectableOrderSite(w, gangId, card, w.buildings[id]));
 }
 

@@ -15,6 +15,7 @@ function rosterFor(w: WorldState, gang: Gang): ReturnType<typeof streetRoster> {
 import { audio } from '../audio/audio';
 import { ORDERS, WEAPONS } from '../sim/constants';
 import { cargoActivity } from '../sim/cargo';
+import { restingStatus } from '../sim/transport';
 import type { Gang, MessageCategory, Person, WorldState } from '../sim/types';
 import type { OverlayKind } from '../render/scene';
 import { previewPosition } from '../sim/movement';
@@ -53,7 +54,7 @@ function currentOrder(p:Person,w:WorldState) {
   if (staff) return staff.paused ? 'Waiting' : staff.type === 'audit' ? 'Audit' : staff.type === 'bribeOfficials' ? 'Bribe Officials' : 'Employ Police';
   if(p.streetOrder)return ({goTo:'Go to',kill:'Kill',assault:'Assault',tail:'Tail'} as const)[p.streetOrder.type];
   const order=p.orderId==null?null:w.orders[p.orderId];
-  return order?.state==='waiting'?'Waiting':cargoActivity(w,p)??(order?ORDERS[order.type].name:p.dest?'Travelling':'Idle');
+  return order?.state==='waiting'?'Waiting':cargoActivity(w,p)??(order?ORDERS[order.type].name:restingStatus(w,p));
 }
 export function WeekHud() {
   const sim=useGame(s=>s.sim)!;

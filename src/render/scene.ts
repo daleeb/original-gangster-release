@@ -20,7 +20,7 @@ import { BUILDING_BY_ID } from '../sim/data/buildings';
 import { buildingMapIntel, knownBlockOwners } from '../sim/mapIntel';
 import { recentEventCounts } from '../sim/events';
 import { drawTerritoryOutline } from './territoryOutline';
-import type { Block, Building, ID, Person, VehicleId, WorldState } from '../sim/types';
+import type { Block, Building, ID, Person, Vec2, VehicleId, WorldState } from '../sim/types';
 import { MAX_CARS, carsAt } from '../sim/traffic';
 import { streetSound } from '../audio/streetSound';
 import { previewGoodsDelivery } from '../sim/goodsDelivery';
@@ -66,7 +66,8 @@ import { previewActorMotion, previewStreetPosition, type PreviewActorMotion } fr
 import { kerbside, roadHeading } from '../sim/vehicleNavigation';
 import { previewVehicle } from '../sim/movement';
 import { specialistParticipants } from '../sim/specialistJobs';
-import { vehicleDriver } from '../sim/transport';
+import { vehicleDriver, atOffice, officeDoors } from '../sim/transport';
+import { siteBuilding } from '../sim/premises';
 import { createVehicleMaterial, VEHICLE_PROFILE, vehicleGeometry, vehicleForPerson, vehicleLightGeometry } from './vehicles';
 import { VehicleSpriteLayer } from './vehicleSpriteLayer';
 import { SculptReviewLayer } from './sculptReviewLayer';
@@ -1392,7 +1393,9 @@ export class CityRenderer {
       const prof = profileForLot(b, t, lot, facing);
       const fireStage=fireDamageStage(b,w.week);
       const outlineStarts = outline && b.id === this.selectedBuildingId ? outlinePools.map(p => p.count) : null;
-      const targetColor = this.planningSelected.has(b.id) ? this.planningRed : this.planningCrimes.has(b.id) ? this.planningYellow : this.planningAvailable.has(b.id) ? this.planningBlue : null;
+      // An apartment block's terraces are marked with its tenement.
+      const siteId = b.cls === 'residential' ? siteBuilding(w, b).id : b.id;
+      const targetColor = this.planningSelected.has(siteId) ? this.planningRed : this.planningCrimes.has(siteId) ? this.planningYellow : this.planningAvailable.has(siteId) ? this.planningBlue : null;
       const targetStarts = targetColor ? targetPools.map(p => p.count) : null;
 
       // Face the street (local +Z); the same facing sized the profile above.
@@ -1983,9 +1986,16 @@ export class CityRenderer {
       areas.some(a => Math.max(Math.abs(p.pos.x - a.x), Math.abs(p.pos.y - a.z)) <= a.r);
     // A lawyer or accountant at a meeting stands in the street with no route.
     const meeting = specialistParticipants(w);
+    // A man back at his office with nothing to do has gone in: found once a frame per gang, and only if asked.
+    const officeDoorsByGang = new Map<ID, Vec2[]>();
+    const doorsOf = (gangId: ID) => {
+      let doors = officeDoorsByGang.get(gangId);
+      if (!doors) officeDoorsByGang.set(gangId, doors = officeDoors(w, gangId));
+      return doors;
+    };
     const people = this.peopleNear(areas, watchedIds).filter(p => near(p) && (burning(p)?
       escapeSample(burning(p)!,w.minute+this.subMinute).time>=0:
-      !bossInsideOffice(p) && !workingInside(w, p) && (streetPersonVisible(p, watchedIds.has(p.id) ? p.id : this.selectedPersonId) || meeting.has(p.id) ||
+      !bossInsideOffice(p) && !workingInside(w, p) && !(p.gangId != null && atOffice(w, p, doorsOf(p.gangId))) && (streetPersonVisible(p, watchedIds.has(p.id) ? p.id : this.selectedPersonId) || meeting.has(p.id) ||
       (this.actionsEnabled && this.characterActions.has(p.id) || this.characterActions.hasDeath(p.id)) && !p.inVehicle && p.status!=='jailed' && p.status!=='kidnapped')));
     if (watchedIds.size) people.sort((a,b) => Number(watchedIds.has(b.id)) - Number(watchedIds.has(a.id)));
     const hdIds = new Set<number>(), visibleIds = new Set<number>();

@@ -48,6 +48,26 @@ describe('planning to street loading boundary', () => {
     expect(sim.world.minute).toBeGreaterThan(minute);
   });
 
+  it('runs the week to the next Monday when the street view never opens', async () => {
+    await useGame.getState().launchWeek();
+    const sim = useGame.getState().sim!, week = sim.world.week;
+    // No renderer here: nothing ever releases the loading card.
+    expect(useGame.getState().streetLoading).toBe(true);
+    await useGame.getState().runWeekUnseen();
+    expect(sim.world.phase).toBe('planning');
+    expect(sim.world.week).toBe(week + 1);
+    const ui = useGame.getState();
+    expect(ui.streetLoading).toBe(false);
+    expect(ui.finishingWeek).toBe(false);
+    expect(ui.paused).toBe(false);
+    expect(ui.organizerTab).toBe('newspaper');
+    expect(ui.planningView).toBe('plan');
+    // The next week launches and can be run the same way.
+    await useGame.getState().launchWeek();
+    await useGame.getState().runWeekUnseen();
+    expect(sim.world.week).toBe(week + 2);
+  });
+
   it('finishes the responsive planning snapshot before changing the world phase', async () => {
     const held = gate();
     useGame.setState({ autosave:vi.fn(async () => { await held.promise; return true; }) });

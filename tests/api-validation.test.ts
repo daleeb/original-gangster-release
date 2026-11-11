@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultGameOptions } from '../src/app/newGame';
-import { allocateBlocks, buyVehicle, buyWeapon, issueOrder, issueStreetOrder, nearTerritory, sellVehicle, sellWeapon, transferVehicle, transferWeapon } from '../src/sim/api';
+import { allocateBlocks, buyVehicle, buyWeapon, cancelOrder, defaultOptions, issueOrder, issueStreetOrder, nearTerritory, replaceOrder, sellVehicle, sellWeapon, transferVehicle, transferWeapon, validBuildingTarget } from '../src/sim/api';
 import type { ApiResult, IssueOrderInput } from '../src/sim/api';
 import { CELL, MINUTES_PER_WEEK, ORDERS } from '../src/sim/constants';
 import { isValidAreaTarget } from '../src/sim/execution';
@@ -24,6 +24,40 @@ function rejectsWithoutMutation(w: WorldState, call: () => ApiResult) {
   expect(call().ok).toBe(false);
   expect(JSON.stringify(w)).toBe(before);
 }
+
+describe('site rules shared by the map and accepted orders', () => {
+  it('sells the middle of a block only to a gang that owns a business in front of it', () => {
+    const { w, gang, team } = fixture();
+    gang.cash = 1_000_000;
+    const blockOf = (id: number) => w.blocks[id].lotIds.map((lot) => w.buildings[w.lots[lot].buildingId]);
+    const land = allBuildings(w).find((b) => b.cls === 'empty' && b.ownerGangId == null && w.lots[b.lotId].index === CENTRE_LOT &&
+      nearTerritory(w, gang.id, b.blockId, 2) && !blockOf(b.blockId).some((x) => x.ownerGangId === gang.id) &&
+      blockOf(b.blockId).some((x) => x.ownerGangId == null && x.cls === 'commercial'))!;
+    expect(land).toBeTruthy();
+    expect(validBuildingTarget(w, gang.id, 'buyPremises', land, defaultOptions())).toBe(false);
+    const refused = issueOrder(w, gang.id, { teamId: team.id, type: 'buyPremises', buildingIds: [land.id] });
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? '' : refused.error).toMatch(/business on this block first/);
+    // Owning one of its fronts opens the sale.
+    blockOf(land.blockId).find((x) => x.ownerGangId == null && x.cls === 'commercial')!.ownerGangId = gang.id;
+    expect(validBuildingTarget(w, gang.id, 'buyPremises', land, defaultOptions())).toBe(true);
+    expect(issueOrder(w, gang.id, { teamId: team.id, type: 'buyPremises', buildingIds: [land.id] }).ok).toBe(true);
+  });
+
+  it('refuses a second raid on a site already raided this week, by any crew, until the first is cancelled', () => {
+    const { w, gang, team } = fixture();
+    const store = allBuildings(w).find((b) => b.ownerGangId == null && b.cls === 'commercial' && b.state === 'trading')!;
+    expect(issueOrder(w, gang.id, { teamId: team.id, type: 'raid', buildingIds: [store.id] }).ok).toBe(true);
+    const first = w.orders[team.orderIds[0]];
+    rejectsWithoutMutation(w, () => issueOrder(w, gang.id, { teamId: team.id, type: 'raid', buildingIds: [store.id] }));
+    // A different job on the same site, and editing the raid itself, are still allowed.
+    expect(issueOrder(w, gang.id, { teamId: team.id, type: 'smashUp', buildingIds: [store.id] }).ok).toBe(true);
+    expect(replaceOrder(w, gang.id, first.id, { teamId: team.id, type: 'raid', buildingIds: [store.id], opts: { priority: true } }).ok).toBe(true);
+    const raid = Object.values(w.orders).find((o) => o.type === 'raid')!;
+    expect(cancelOrder(w, raid.id).ok).toBe(true);
+    expect(issueOrder(w, gang.id, { teamId: team.id, type: 'raid', buildingIds: [store.id] }).ok).toBe(true);
+  });
+});
 
 describe('resource ownership', () => {
   it.each(['rival', 'missing'] as const)('rejects every resource operation with a %s crew', (kind) => {
@@ -178,13 +212,17 @@ describe('order validation is atomic', () => {
       rejectsWithoutMutation(w, () => issueOrder(w, gang.id, { ...input, opts: { manpower } }));
     }
     rejectsWithoutMutation(w, () => issueOrder(w, gang.id, { ...input, opts: { preferredHoodId: rival.lieutenantId } }));
-    team.timeUsed = MINUTES_PER_WEEK;
+    // The whole week spoken for, including the little latitude a lieutenant allows himself:
+    // one man's errand in a crew of nine takes only a ninth of its time, so 100% alone leaves room for it.
+    team.timeUsed = MINUTES_PER_WEEK * 1.02;
     rejectsWithoutMutation(w, () => issueOrder(w, gang.id, input));
   });
 
   it('accepts valid building, area and person selections and snapshots caller arrays', () => {
     const { w, gang, team, rival } = fixture();
-    const site = allBuildings(w).find((b) => b.cls === 'empty' && b.ownerGangId == null && nearTerritory(w, gang.id, b.blockId, 2))!;
+    const site = allBuildings(w).find((b) => b.ownerGangId == null && nearTerritory(w, gang.id, b.blockId, 2) &&
+      validBuildingTarget(w, gang.id, 'buyPremises', b, defaultOptions()))!;
+    gang.cash = 1_000_000;
     expect(issueOrder(w, gang.id, { teamId: team.id, type: 'buyPremises', buildingIds: [site.id] }).ok).toBe(true);
     expect(issueOrder(w, gang.id, { teamId: team.id, type: 'assault', personId: rival.lieutenantId }).ok).toBe(true);
     team.timeUsed = 0;

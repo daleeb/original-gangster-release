@@ -8,6 +8,7 @@ import { automaticRoofsPreference } from '../render/viewModes';
 import { bossInsideOffice } from '../render/characterPresentation';
 import { create } from 'zustand';
 import { fitAreaToWeek, type ApiResult } from '../sim/api';
+import { weekCharge } from '../sim/execution';
 import { Sim } from '../sim/sim';
 import { planGang } from '../sim/ai';
 import type { GameOptions, ID, MessageCategory, OrderOptions, OrderType, SpecialistJob, Vec2 } from '../sim/types';
@@ -18,7 +19,7 @@ import { cloneSavedWorldResponsive, loadGame, loadSlotWorld, saveGame, type Save
 import { yieldForInput } from '../yieldForInput';
 import { yieldForPaint } from '../yieldForPaint';
 import { captureTutorialProgress } from './tutorials';
-import { addOrderBlocks, toggleOrderBlock, toggleOrderSite } from './orderSelection';
+import { addOrderBlocks, blockOrderSites, selectableOrderSite, toggleOrderBlock, toggleOrderSite } from './orderSelection';
 import { personMapPosition } from '../sim/mapIntel';
 
 /** Colour washes: the map draws one of these at a time. */
@@ -99,6 +100,9 @@ interface GameState {
   roadNames: boolean;
   /** The original's Mouse Reversal (Advanced Options): dragging moves the view the other way. */
   mouseReversal: boolean;
+  /** Show the Bureau's suspicion and the evidence against you as gauges. The
+   *  original left the player to judge both from his own books; off hides them. */
+  bureauGauges: boolean;
   /** Model texture quality; applies when the city next loads (A20). */
   textureQuality: TextureQuality;
   /** Interface scale chosen in Options (desktop app; see uiScale.ts). */
@@ -150,8 +154,12 @@ interface GameState {
   bump: () => void;
   launchWeek: () => Promise<void>;
   /** Skip to Friday: finish the week and put the city away for Monday. */
-  finishWeek: () => Promise<void>;
+  /** `sliceMs`: how long each slice of the week may hold the page (longer when nothing is being drawn). */
+  finishWeek: (sliceMs?: number) => Promise<void>;
   cancelFinishWeek: () => void;
+  /** The street view could not be opened: run the working week to its end
+   *  without it, and come back to the desk with the reports. */
+  runWeekUnseen: () => Promise<void>;
   advance: (seconds: number) => void;
 
   setTab: (t: OrganizerTab) => void;
@@ -172,6 +180,7 @@ interface GameState {
   setAutoLowerRoofs: (on: boolean) => void;
   setRoadNames: (on: boolean) => void;
   setMouseReversal: (on: boolean) => void;
+  setBureauGauges: (on: boolean) => void;
   setTextureQuality: (quality: TextureQuality) => void;
   setUiScale: (scale: number) => void;
   togglePoliceAreaBlock: (id: ID) => void;
@@ -223,7 +232,8 @@ function fitJobCard(sim: Sim | null, jc: JobCard, refit = false): JobCard {
   if (refit && card.requested) { card.buildingIds = [...card.requested.buildingIds]; card.blockIds = [...card.requested.blockIds]; }
   else card.requested = { buildingIds: [...card.buildingIds], blockIds: [...card.blockIds] };
   if (!sim) return card;
-  const editing = card.editingOrderId != null ? sim.world.orders[card.editingOrderId]?.estimatedMinutes ?? 0 : 0;
+  const edited = card.editingOrderId != null ? sim.world.orders[card.editingOrderId] : undefined;
+  const editing = edited && sim.world.teams[edited.teamId] ? weekCharge(sim.world, sim.world.teams[edited.teamId], edited) : 0;
   const fit = fitAreaToWeek(sim.world, sim.playerGang.id, card, editing);
   if (!fit || !fit.buildingIds.length) return card;
   return { ...card, buildingIds: fit.buildingIds, blockIds: [], trimmed: { dropped: fit.dropped, total: fit.total } };
@@ -236,6 +246,10 @@ const endingUi = {
 
 function readMouseReversal(): boolean {
   try { return localStorage.getItem('og.mouseReversal') === '1'; } catch { return false; }
+}
+
+function readBureauGauges(): boolean {
+  try { return localStorage.getItem('og.bureauGauges') !== '0'; } catch { return true; }
 }
 
 function readRoadNames(): boolean {
@@ -287,6 +301,7 @@ export const useGame = create<GameState>((set, get) => ({
   autoLowerRoofs: readAutoLower(),
   roadNames: readRoadNames(),
   mouseReversal: readMouseReversal(),
+  bureauGauges: readBureauGauges(),
   textureQuality: readTextureQuality(),
   uiScale: readUiScale(),
   quitPrompt: false,
@@ -573,6 +588,10 @@ export const useGame = create<GameState>((set, get) => ({
     try { localStorage.setItem('og.mouseReversal', mouseReversal ? '1' : '0'); } catch { /* session only */ }
     set({ mouseReversal });
   },
+  setBureauGauges: (bureauGauges) => {
+    try { localStorage.setItem('og.bureauGauges', bureauGauges ? '1' : '0'); } catch { /* session only */ }
+    set({ bureauGauges });
+  },
   setRoadNames: (roadNames) => {
     try { localStorage.setItem('og.roadNames', roadNames ? '1' : '0'); } catch { /* session only */ }
     set({ roadNames });
@@ -625,6 +644,10 @@ export const useGame = create<GameState>((set, get) => ({
     const allocated = sim && (type === 'patrol' || type === 'collectProtection')
       ? sim.world.teams[teamId]?.allocatedBlockIds ?? [] : [];
     set({
+      // The building looked at before the card opened is not one of its targets:
+      // left selected, it stayed highlighted beside whatever was picked next.
+      selectedBuildingId: null,
+      selectedPersonId: null,
       // Configure the order in the journal; "Pick on map" folds it away when needed.
       organizerCollapsed: false,
       // The orders list makes way for the map the targets are picked on.
@@ -646,6 +669,8 @@ export const useGame = create<GameState>((set, get) => ({
           protectionLevel: 1,
           // Bribes have an adjustable offer; donations are quoted for the chosen charity.
           amount: type === 'bribe' ? 1000 : undefined,
+          // Recruiting looks for hoods unless the card is switched to accountants or lawyers.
+          ...(type === 'recruit' ? { recruitKind: 'hood' as const } : {}),
         },
       },
       pickMode: { kind: 'order' },
@@ -671,11 +696,22 @@ export const useGame = create<GameState>((set, get) => ({
     const jc = get().jobCard;
     if (!jc) return;
     const next = { ...jc, opts: { ...jc.opts, ...patch } };
-    set({ jobCard: 'manpower' in patch ? fitJobCard(get().sim, next, true) : next });
+    const sim = get().sim;
+    // Another kind of recruit keeps other haunts: what was picked for the old
+    // kind and does not suit the new one is dropped from the selection.
+    if ('recruitKind' in patch && sim) {
+      const w = sim.world, gangId = sim.playerGang.id, asked = { ...next, ...next.requested };
+      set({ jobCard: fitJobCard(sim, { ...next,
+        blockIds: asked.blockIds.filter(id => blockOrderSites(w, gangId, next, id).length > 0),
+        buildingIds: asked.buildingIds.filter(id => w.buildings[id] && selectableOrderSite(w, gangId, next, w.buildings[id])) }) });
+      return;
+    }
+    set({ jobCard: 'manpower' in patch ? fitJobCard(sim, next, true) : next });
   },
 
   cancelJobCard: () => set({ jobCard: null, pickMode: null, organizerCollapsed: false }),
   beginSpecialistOrder: (type, personId) => set({ specialistCard: { type, personId: personId ?? null }, jobCard: null,
+    selectedBuildingId: null, selectedPersonId: null,
     pickMode: { kind: type === 'employPolice' && personId == null ? 'policeArea' : 'specialist' },
     policeAreaBlockIds: [], sheet: null, organizerCollapsed: false }),
   selectSpecialistTarget: (personId) => {
@@ -748,7 +784,7 @@ export const useGame = create<GameState>((set, get) => ({
 
   // Not offered to the player (the original has no End Week; maximum speed runs
   // flat out). Kept for tools and tests that need to finish a week quickly.
-  finishWeek: async () => {
+  finishWeek: async (sliceMs) => {
     const sim = get().sim;
     if (sim?.world.phase === 'gameOver' && get().screen === 'game') { get().bump(); return; }
     if (!sim || sim.world.phase !== 'week' || get().streetLoading || get().finishingWeek || get().savingToQuit || get().savingSnapshot || get().loadingSave != null) return;
@@ -760,7 +796,7 @@ export const useGame = create<GameState>((set, get) => ({
       await yieldForInput();
       if (run !== finishRun || get().sim !== sim || !get().finishingWeek || get().screen !== 'game') return;
       if (get().loadingSave != null) continue;
-      sim.finishWeekSlice();
+      sim.finishWeekSlice(sliceMs);
       if (performance.now() - lastUi >= 200 || sim.world.phase !== 'week') {
         get().bump();
         lastUi = performance.now();
@@ -772,6 +808,19 @@ export const useGame = create<GameState>((set, get) => ({
   },
 
   cancelFinishWeek: () => set({ finishingWeek: false, paused: true }),
+
+  // The clock is normally released by the street view's first prepared frame
+  // (CityView). Where the city cannot be drawn at all (no WebGL 2, a lost
+  // graphics context) that frame never comes, so the week is run here instead:
+  // the same simulation, to Friday's settlement, the newspaper and the reports.
+  runWeekUnseen: async () => {
+    const sim = get().sim;
+    if (!sim || sim.world.phase !== 'week' || get().screen !== 'game' || get().finishingWeek ||
+      get().savingToQuit || get().savingSnapshot || get().loadingSave != null) return;
+    set({ streetLoading: false, paused: false, planningView: 'plan', taggedPersonIds: [] });
+    // Nothing is being drawn, so the week can take most of each frame.
+    await get().finishWeek(40);
+  },
 
   autosave: async (responsive = false) => {
     const sim = get().sim;

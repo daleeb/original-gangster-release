@@ -8,6 +8,7 @@ import { GO_STRAIGHT_ASSETS } from '../../sim/constants';
 import { gangAssets, gangWealth, money, powerRating, territoryCount } from '../../sim/world';
 import { ConfirmDialog, Empty, Panel } from '../common';
 import { UI_SCALES, uiScaleAvailable, uiScaleInUse } from '../../app/uiScale';
+import { downloadDebugFile } from '../../app/debugFile';
 
 /** Interface size: zooms the whole desktop window; a browser has its own zoom. */
 function InterfaceSize() {
@@ -61,6 +62,7 @@ export function OptionsTab() {
   const roadNames = useGame((s) => s.roadNames);
   const mouseReversal = useGame((s) => s.mouseReversal);
   const textureQuality = useGame((s) => s.textureQuality);
+  const bureauGauges = useGame((s) => s.bureauGauges);
   const setRoadNames = useGame((s) => s.setRoadNames);
   const setAutoLowerRoofs = useGame((s) => s.setAutoLowerRoofs);
   const startGame = useGame((s) => s.startGame);
@@ -188,6 +190,14 @@ export function OptionsTab() {
         <div className="muted tiny" style={{ marginTop: 6 }}>
           Standard uses a quarter of the graphics memory for people, cars and trees, for older graphics cards. It applies when the city next loads.
         </div>
+        <button aria-pressed={bureauGauges} className={`btn sm${bureauGauges ? ' on' : ''}`} style={{ marginTop: 8 }}
+          onClick={() => useGame.getState().setBureauGauges(!bureauGauges)}>
+          {bureauGauges ? 'Bureau gauges: shown' : 'Bureau gauges: hidden'}
+        </button>
+        <div className="muted tiny" style={{ marginTop: 6 }}>
+          The Accountant's FBI suspicion and evidence gauges, and the Suspicion graph. The original showed neither:
+          hidden, you judge the heat from your own books, your crimes and who you have paid.
+        </div>
         <InterfaceSize />
       </Panel>
 
@@ -239,6 +249,26 @@ export function OptionsTab() {
             {gameMusic ? 'Game music: On' : 'Game music: Off'}
           </button>
         </div>
+      </Panel>
+
+      <Panel title="Reporting a Problem">
+        <div className="muted tiny" style={{ marginBottom: 8 }}>
+          Version {__APP_VERSION__} (also in the bottom right corner of every screen, so it shows in screenshots). A debug
+          file holds this city as it stands, your settings and your graphics details: attach it to your report so the
+          problem can be looked at exactly as you saw it. It is saved to your downloads and sent nowhere.
+        </div>
+        <button className="btn" onClick={() => {
+          const state = useGame.getState();
+          void downloadDebugFile(sim, {
+            organizerTab: state.organizerTab, planningView: state.planningView, overlays: state.overlays, pickMode: state.pickMode,
+            jobCard: state.jobCard, specialistCard: state.specialistCard, sheet: state.sheet, selectedTeamId: state.selectedTeamId,
+            selectedBuildingId: state.selectedBuildingId, speed: state.speed, paused: state.paused, uiScale: state.uiScale,
+            textureQuality: state.textureQuality,
+          }).then((name) => state.notify(`Debug file saved as ${name}.`),
+            () => state.notify({ ok: false, error: 'The debug file could not be written.' }));
+        }}>
+          Save a debug file
+        </button>
       </Panel>
 
       <Panel title="Quit">

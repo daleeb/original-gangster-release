@@ -5,11 +5,20 @@ import { defaultOptions, issueOrder, previewOrder, replaceOrder, validBuildingTa
 import { selectableOrderPerson, selectableOrderSite } from '../app/orderSelection';
 import { MINUTES_PER_WEEK, ORDERS, ORDER_GROUPS } from '../sim/constants';
 import { BUILDING_BY_ID, ILLEGAL_TYPES, ESTABLISHABLE_TYPES, coverQuality } from '../sim/data/buildings';
-import { expandTargets } from '../sim/execution';
+import { buildingValue, expandTargets, fitsWeek, weekCharge } from '../sim/execution';
+import { SKILL_LABELS } from '../sim/types';
 import { donationAmount } from '../sim/charity';
 import { crewPeople, orderStaffing, readyForPlanning } from '../sim/orderStaffing';
-import { buildingName, buildingsOfBlock, money } from '../sim/world';
+import { buildingName, buildingsOfBlock, money, placeName, skillAvg } from '../sim/world';
+import { buildingMapIntel } from '../sim/mapIntel';
 import { Icon, Kicker, Rivets, Stars } from './common';
+
+/** Who a Recruit order can look for, and where each kind is found. */
+const RECRUIT_KINDS = [
+  { id: 'hood', label: 'Hoods', where: 'Hoods are found at gyms, pool halls, cafes, the docks and the labour exchange.' },
+  { id: 'accountant', label: 'Accountants', where: 'Accountants are found at accountancy firms, finance companies and the main bank.' },
+  { id: 'lawyer', label: 'Lawyers', where: 'Lawyers are found at law offices and the courthouse.' },
+] as const;
 
 /** The job card occupies the journal page, leaving the map available for targets. */
 export function JobCardPanel() {
@@ -38,7 +47,7 @@ export function JobCardPanel() {
   const staffing = team ? orderStaffing(w, team, jc, true) : null;
   const crewIndex = team ? gang.teamIds.indexOf(team.id) + 1 : 0;
 
-  const expanded = expandTargets(w, gang.id, jc.type, jc.blockIds, jc.buildingIds);
+  const expanded = expandTargets(w, gang.id, jc.type, jc.blockIds, jc.buildingIds, jc.opts);
   const targetCount = def.target === 'area' ? expanded.length : jc.buildingIds.length;
   const person = jc.personId != null ? w.people[jc.personId] : null;
 
@@ -70,8 +79,19 @@ export function JobCardPanel() {
   const chosenType = jc.opts.businessTypeId ? BUILDING_BY_ID[jc.opts.businessTypeId] : null;
   const chosenFront = jc.opts.frontBuildingId != null ? w.buildings[jc.opts.frontBuildingId] : null;
 
+  // What the order will cost when the crew gets there, shown before it is sent.
+  const price = jc.type === 'buyPremises' && land ? buildingValue(w, land)
+    : jc.type === 'setUpBusiness' && chosenType ? chosenType.cost : null;
+  const shortBy = price != null ? Math.max(0, Math.round(price - gang.cash)) : 0;
+
+  // The people best suited to the job first, with the skills it calls on.
+  const suited = (p: (typeof people)[number]) => (def.skills.length ? skillAvg(p, def.skills) : 0);
+  const ranked = [...people].sort((a, b) => Number(readyForPlanning(w, b)) - Number(readyForPlanning(w, a)) || suited(b) - suited(a));
+  const skillNote = (p: (typeof people)[number]) => def.skills.map((k) => `${SKILL_LABELS[k]} ${p.skills[k]}★`).join(' · ');
+
   const canConfirm = (() => {
     if (!team || staffing?.reason) return false;
+    if (shortBy > 0) return false;
     if(jc.type==='export'&&!team?.vehicles.truck)return false;
     if (def.target === 'person') return person != null && selectableOrderPerson(w, gang.id, jc.type, person);
     if (def.target === 'building') return !!land && selectableOrderSite(w, gang.id, jc, land) &&
@@ -91,8 +111,10 @@ export function JobCardPanel() {
   const draft = previewOrder(w, gang.id, { ...jc, opts });
   const dispatchIssue = staffing?.reason ?? (jc.type==='export'&&!team?.vehicles.truck ? 'Allocate a truck to this crew to export goods.' : null);
   const estimate = draft ? (draft.estimatedMinutes / 60).toFixed(1) + 'h estimated crew time' : 'Choose a crew';
-  const committed = Math.max(0, (team?.timeUsed ?? 0) - (jc.editingOrderId != null ? w.orders[jc.editingOrderId]?.estimatedMinutes ?? 0 : 0));
-  const exceedsBudget = !!team && !!draft && committed + draft.estimatedMinutes > MINUTES_PER_WEEK * 1.02;
+  // The crew's week is its people's time: a job for one man of five takes a fifth of what it would with all five on it.
+  const committed = Math.max(0, (team?.timeUsed ?? 0) - (team && previous ? weekCharge(w, team, previous) : 0));
+  const charge = team && draft ? weekCharge(w, team, draft) : 0;
+  const exceedsBudget = !!team && !!draft && !fitsWeek(w, team, draft, committed);
 
   const send = (buildingIds: number[], blockIds: number[]) => {
     const res = act((s) => {
@@ -177,6 +199,24 @@ export function JobCardPanel() {
                 {' chosen. Click again to remove; shift-click picks one site.'}
               </div>
             )}
+            {/* Which places, and whose: a count alone left the player guessing what was picked. */}
+            {(def.target === 'area' || def.target === 'building') && expanded.length > 0 && (
+              <ul className="job-sites" aria-label="Chosen sites">
+                {expanded.slice(0, 8).map((id) => {
+                  const b = w.buildings[id];
+                  if (!b) return null;
+                  const intel = buildingMapIntel(b, gang.id);
+                  const holder = intel.ownerGangId != null ? (intel.ownerGangId === gang.id ? 'yours' : w.gangs[intel.ownerGangId]?.name)
+                    : intel.protectionGangId != null ? `pays ${intel.protectionGangId === gang.id ? 'you' : w.gangs[intel.protectionGangId]?.name}` : null;
+                  const owner = b.ownerPersonId != null ? w.people[b.ownerPersonId]?.name : null;
+                  return <li key={id}>
+                    <button className="order-target-link" title="Show on the map" onClick={() => useGame.getState().requestCamera({ ...w.lots[b.lotId].center })}>{placeName(w, b)}</button>
+                    {(holder || owner) && <span className="muted"> · {[holder, owner].filter(Boolean).join(' · ')}</span>}
+                  </li>;
+                })}
+                {expanded.length > 8 && <li className="muted">…and {expanded.length - 8} more</li>}
+              </ul>
+            )}
             {def.target === 'person' && (
               <div className="sub">
                 {!person && 'Buildings containing an available target are highlighted in blue. '}
@@ -189,6 +229,24 @@ export function JobCardPanel() {
               </div>
             )}
           </div>
+
+          {/* ---- Recruit: who to look for */}
+          {jc.type === 'recruit' && (
+            <div>
+              <Kicker style={{ marginBottom: 6 }}>Recruit</Kicker>
+              <div className="opt-row" role="group" aria-label="Kind of recruit">
+                {RECRUIT_KINDS.map((k) => (
+                  <button key={k.id} aria-pressed={(jc.opts.recruitKind ?? 'hood') === k.id} className={`chip${(jc.opts.recruitKind ?? 'hood') === k.id ? ' on' : ''}`}
+                    title={k.where} onClick={() => updateOpts({ recruitKind: k.id })}>
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+              <div className="muted tiny" style={{ marginTop: 4 }}>
+                {RECRUIT_KINDS.find((k) => k.id === (jc.opts.recruitKind ?? 'hood'))!.where} Only those places are highlighted.
+              </div>
+            </div>
+          )}
 
           {/* ---- Set Up Business */}
           {jc.type === 'setUpBusiness' && land && (
@@ -246,6 +304,21 @@ export function JobCardPanel() {
               </label>
               <input id="JobCardPanel-field-1" type="range" min={0} max={2} step={0.1} value={jc.opts.protectionLevel ?? 1} onChange={(e) => updateOpts({ protectionLevel: Number(e.target.value) })} />
               <div className="muted tiny">Anything above the going rate breeds refusals — and refusers talk to the police.</div>
+            </div>
+          )}
+
+          {/* ---- what it costs */}
+          {(jc.type === 'buyPremises' || jc.type === 'setUpBusiness') && (
+            <div className="field" aria-label={jc.type === 'buyPremises' ? 'Asking price' : 'Fit-out cost'}>
+              <Kicker>{jc.type === 'buyPremises' ? 'Asking price' : 'Fit-out cost'}</Kicker>
+              {price != null ? <>
+                <strong>{money(price)}</strong>
+                <p className={shortBy > 0 ? 'tiny job-short' : 'muted'} role={shortBy > 0 ? 'status' : undefined}>
+                  {shortBy > 0
+                    ? `You have ${money(gang.cash)} in the safe: ${money(shortBy)} short.`
+                    : `Paid when the crew gets there. You have ${money(gang.cash)} in the safe.`}
+                </p>
+              </> : <p className="muted">{jc.type === 'buyPremises' ? 'Choose a site to see what it costs.' : 'Choose a business to see what it costs.'}</p>}
             </div>
           )}
 
@@ -308,7 +381,7 @@ export function JobCardPanel() {
               <span>Crew of {people.length} · {staffing?.available ?? 0} available</span>
               <span>
                 {Math.round((committed / MINUTES_PER_WEEK) * 100)}% of the week already committed
-                {!dispatchIssue && <> · this job {estimate}{exceedsBudget ? ' · exceeds remaining week' : ''}</>}
+                {!dispatchIssue && <> · this job {estimate}{draft ? ` (${Math.max(1, Math.round((charge / MINUTES_PER_WEEK) * 100))}% of the crew's week)` : ''}{exceedsBudget ? ' · exceeds remaining week' : ''}</>}
               </span>
             </div>
           )}
@@ -319,14 +392,17 @@ export function JobCardPanel() {
             <div>
               <Kicker style={{ marginBottom: 6 }}>Send somebody in particular?</Kicker>
               <select aria-label="Preferred crew member" className="text-input" value={jc.opts.preferredHoodId ?? ''} onChange={(e) => updateOpts({ preferredHoodId: e.target.value ? Number(e.target.value) : null })}>
-                <option value="">Let the lieutenant choose</option>
-                {people
+                <option value="">Let the lieutenant choose{def.skills.length ? ' (the best suited go)' : ''}</option>
+                {ranked
                   .map((p) => (
                     <option key={p.id} value={p.id} disabled={!readyForPlanning(w, p)}>
-                      {p.name}{!readyForPlanning(w, p) ? ' — unavailable' : ''}
+                      {p.name}{p.id === team.lieutenantId ? ' (lieutenant)' : ''}{def.skills.length ? ` — ${skillNote(p)}` : ''}{!readyForPlanning(w, p) ? ' — unavailable' : ''}
                     </option>
                   ))}
               </select>
+              {def.skills.length > 0 && <div className="muted tiny" style={{ marginTop: 4 }}>
+                Listed best first for this job: {def.skills.map((k) => SKILL_LABELS[k].toLowerCase()).join(' and ')}.
+              </div>}
             </div>
           )}
         </div>

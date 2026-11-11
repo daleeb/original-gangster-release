@@ -1,3 +1,4 @@
+import { restingStatus } from '../src/sim/transport';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { defaultGameOptions } from '../src/app/newGame';
 import { issueStreetOrder } from '../src/sim/api';
@@ -121,7 +122,10 @@ describe('responsive live attacks', () => {
 
   it('cancels a pursuit when the target is no longer available', () => {
     const s=scene(); order(s); s.target.status='jailed'; tick(s);
-    expect(s.actor.streetOrder).toBeNull(); expect(s.actor.dest).toBeNull();
+    expect(s.actor.streetOrder).toBeNull();
+    // The pursuit is dropped. With nothing else to do he makes for the office, as the
+    // original's men did, rather than stand where it ended (issue 10 item 14).
+    expect(restingStatus(s.w, s.actor)).toMatch(/office/);
     expect(presentationEvents(s.w).events).toHaveLength(0);
   });
 

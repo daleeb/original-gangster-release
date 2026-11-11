@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useGame } from '../app/store';
-import { buildingName } from '../sim/world';
+import { buildingName, dist } from '../sim/world';
+import { nearestOffice } from '../sim/execution';
+import { CELL } from '../sim/constants';
 import { buildingMapIntel } from '../sim/mapIntel';
 import { Modal } from './common';
 import { handleMapHit } from './mapClick';
@@ -35,10 +37,17 @@ function MapChooser({ onClose }: { onClose: () => void }) {
   const picking = mode?.kind === 'order' && card != null;
   const selected = new Set(card ? selectedOrderSites(w, gang.id, card) : []);
   const staffSites = staff ? specialistPeopleBySite(w, gang.id, staff.type) : new Map<number, number>();
+  // An area order takes as many places as you like: the list stays open while they are ticked.
+  const several = picking && ORDERS[card.type].target === 'area';
   const select = (hit: PickResult, site = false) => {
     handleMapHit(hit, { site });
-    if (!(mode?.kind === 'lieutenantArea' || mode?.kind === 'policeArea' || mode?.kind === 'order' && kind === 'blocks')) onClose();
+    if (!(mode?.kind === 'lieutenantArea' || mode?.kind === 'policeArea' || mode?.kind === 'order' && kind === 'blocks' || several && kind === 'buildings')) onClose();
   };
+  // How far each place is from the headquarters, nearest first.
+  const office = nearestOffice(w, gang.id, w.blocks[0].center);
+  const hq = office ? w.lots[office.lotId].center : null;
+  const away = (p: { x: number; y: number }) => (hq ? dist(hq, p) : 0);
+  const far = (p: { x: number; y: number }) => (hq ? ` · ${(away(p) / CELL).toFixed(1)} blocks from HQ` : '');
   const people = peopleList(w).filter(p => staff ? specialistTargetEligible(w, gang.id, staff.type, p) : picking ? selectableOrderPerson(w, gang.id, card.type, p)
     : (p.gangId === gang.id || p.gangId == null || gang.knownPeople.includes(p.id)) &&
       (!streetPeople || !['dead', 'jailed', 'kidnapped'].includes(p.status) && !mode.personIds.includes(p.id)));
@@ -50,13 +59,16 @@ function MapChooser({ onClose }: { onClose: () => void }) {
         .map(b => ({ id: b.id, label: `Block ${b.gx},${b.gy}`, hit: { personId: null, buildingId: null, blockId: b.id, point: b.center } }))
       : buildingList(w).filter(b => (!staff || staffSites.has(b.id)) && buildingMapIntel(b, gang.id).siteKnown && (!picking || ORDERS[card.type].target === 'point' ||
         (ORDERS[card.type].target === 'person' ? orderPersonAtSite(w, gang.id, card.type, b) != null : selectableOrderSite(w, gang.id, card, b))))
-        .map(b => ({ id: b.id, label: `${buildingName(w, b.id)} · block ${w.blocks[b.blockId].gx},${w.blocks[b.blockId].gy} · site ${w.lots[b.lotId].index + 1}`,
+        .sort((a, b) => away(w.lots[a.lotId].center) - away(w.lots[b.lotId].center))
+        .map(b => ({ id: b.id, label: `${buildingName(w, b.id)} · block ${w.blocks[b.blockId].gx},${w.blocks[b.blockId].gy} · site ${w.lots[b.lotId].index + 1}${far(w.lots[b.lotId].center)}`,
         hit: { personId: null, buildingId: b.id, blockId: b.blockId, point: w.lots[b.lotId].center } }));
   const filtered = rows.filter(r => r.label.toLowerCase().includes(needle));
   const block = cityBlockAt(w, x, y);
   const blockAvailable = block && (!lieutenant || lieutenant.available.has(block.id)) && (!picking || ORDERS[card.type].target === 'point' || blockOrderSites(w, gang.id, card, block.id).length > 0);
   return <Modal title="Choose on map" onClose={onClose}>
-      <p>{lieutenant ? 'Choose your territory to allocate it, or select an assigned block again to remove it. Another lieutenant must release their area before you can take it.' : 'Select a person, site or block to perform the current map action. Area selections can include several blocks.'}</p>
+      <p>{lieutenant ? 'Choose your territory to allocate it, or select an assigned block again to remove it. Another lieutenant must release their area before you can take it.'
+        : several ? 'Type a name (pool hall, cafe…) and tick every place you want: the list stays open, nearest your headquarters first. Click a ticked place again to drop it, then close.'
+        : 'Select a person, site or block to perform the current map action. Area selections can include several blocks.'}</p>
       <label>Find <input className="text-input" value={query} onChange={e => setQuery(e.target.value)} /></label>
       <div className="row wrap">{(['buildings', 'people', 'blocks'] as const).filter(k => areaMode ? k === 'blocks' : !staff || k !== 'blocks').map(k => <button className="btn" key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>{k[0].toUpperCase() + k.slice(1)}</button>)}</div>
       {(!staff || mode?.kind === 'policeArea') && <div className="row wrap">
@@ -67,6 +79,7 @@ function MapChooser({ onClose }: { onClose: () => void }) {
       <p role="status">{filtered.length} matches{filtered.length > 50 ? ' · first 50 shown; refine your search' : ''}</p>
       <div className="scroll-list">{filtered.slice(0, 50).map(r => <button className="list-row" key={r.id}
         aria-pressed={kind === 'blocks' ? lieutenant ? lieutenant.selected.has(r.id) : mode?.kind === 'policeArea' ? policeBlocks.includes(r.id) : !!card?.blockIds.includes(r.id) : kind === 'buildings' ? selected.has(r.id) : (staff ?? card)?.personId === r.id}
-        onClick={() => select(r.hit, kind === 'buildings')}>{r.label}</button>)}</div>
+        onClick={() => select(r.hit, kind === 'buildings')}>{several && kind === 'buildings' ? (selected.has(r.id) ? '☑ ' : '☐ ') : ''}{r.label}</button>)}</div>
+      {several && kind === 'buildings' && <p role="status" className="muted">{selected.size} place{selected.size === 1 ? '' : 's'} chosen for this order.</p>}
     </Modal>;
 }

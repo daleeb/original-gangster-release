@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defaultGameOptions } from '../src/app/newGame';
 import { applyTutorial, TUTORIALS } from '../src/app/tutorials';
-import { buyWeapon, issueOrder, nearTerritory, setDiplomacy } from '../src/sim/api';
+import { buyWeapon, defaultOptions, issueOrder, nearTerritory, setDiplomacy, validBuildingTarget } from '../src/sim/api';
 import { isValidAreaTarget } from '../src/sim/execution';
 import { Sim } from '../src/sim/sim';
 import type { OrderType } from '../src/sim/types';
@@ -9,9 +9,11 @@ import { allBuildings } from '../src/sim/world';
 
 function ordered(sim: Sim, type: OrderType) {
   const w = sim.world, g = sim.playerGang;
+  // Anything for sale to this gang: the middle of a block is not, until it owns a front there.
   const b = allBuildings(w).find(b => type === 'buyPremises'
-    ? b.cls === 'empty' && b.ownerGangId == null && nearTerritory(w, g.id, b.blockId, 2)
+    ? validBuildingTarget(w, g.id, type, b, defaultOptions()) && nearTerritory(w, g.id, b.blockId, 2)
     : isValidAreaTarget(w, g.id, type, b))!;
+  if (type === 'buyPremises') g.cash = Math.max(g.cash, 1_000_000);
   expect(issueOrder(w, g.id, { teamId: g.teamIds[0], type, buildingIds: [b.id] }).ok).toBe(true);
   const order = w.orders[w.teams[g.teamIds[0]].orderIds.at(-1)!];
   return () => { order.state = 'cancelled'; };

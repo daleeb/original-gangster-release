@@ -465,6 +465,9 @@ export interface OrderOptions {
   frontBuildingId?: ID;
   /** donate / bribe: money committed. */
   amount?: number;
+  /** recruit: only the haunts of this kind of recruit. Absent (older saves,
+   * the computer's gangs) takes whoever each place has. */
+  recruitKind?: 'hood' | 'accountant' | 'lawyer';
 }
 
 export type OrderState =

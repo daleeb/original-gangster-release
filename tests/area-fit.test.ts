@@ -4,6 +4,7 @@ import { defaultGameOptions } from '../src/app/newGame';
 import { fitAreaToWeek, issueOrder, previewOrder } from '../src/sim/api';
 import { activeBlocks } from '../src/sim/cityLayout';
 import { MINUTES_PER_WEEK } from '../src/sim/constants';
+import { fitsWeek } from '../src/sim/execution';
 
 describe('area selections the crew has not got the time for', () => {
   it('leaves off the farthest sites until the rest fit the week, and the trimmed order is accepted', () => {
@@ -20,7 +21,8 @@ describe('area selections the crew has not got the time for', () => {
     expect(fit.buildingIds.length).toBeGreaterThan(0);
     expect(fit.buildingIds.length + fit.dropped).toBe(fit.total);
     const kept = previewOrder(w, g.id, { ...input, blockIds: [], buildingIds: fit.buildingIds })!;
-    expect(team.timeUsed + kept.estimatedMinutes).toBeLessThanOrEqual(MINUTES_PER_WEEK * 1.02);
+    // The crew's week is charged by the share of its people the job takes.
+    expect(fitsWeek(w, team, kept, team.timeUsed)).toBe(true);
     expect(issueOrder(w, g.id, { ...input, blockIds: [], buildingIds: fit.buildingIds }).ok).toBe(true);
   });
 

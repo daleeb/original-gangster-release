@@ -21,10 +21,14 @@ import {
 import { BUILDING_BY_ID, coverQuality } from './data/buildings';
 import { addMessage, addNews, blockAtPos, recordCrime, reportBusinessMove, shiftLocalOpinion } from './events';
 import { donationAmount, donationTarget } from './charity';
-import { purchasablePremisesType } from './premises';
+import { centreLotNeedsFront, protectionFee, purchasablePremisesType } from './premises';
+import { replanPursuit } from './streetPursuit';
 import { respondToBureauViolence } from './bureauViolence';
 import { presentDeath, presentAttack, presentBuildingEffect, presentThrow, THROW_TIMING } from './presentationEvents';
-import type { MessageCategory } from './types';
+import type {
+  MessageCategory,
+  OrderOptions,
+} from './types';
 import { hoodPayDemand, newId } from './citygen';
 import { payCash, receiveOrderCash } from './finances';
 import { resetBusinessInvestigation } from './businessState';
@@ -149,11 +153,15 @@ function actorSkill(actors: Person[], skills: (keyof Skills)[]): number {
   return best * 0.7 + (sum / actors.length) * 0.3;
 }
 
-/** Success roll shared by every order. `difficulty` is 0 (trivial) .. 1 (brutal). */
-function roll(rng: Rng, actors: Person[], skills: (keyof Skills)[], difficulty: number): boolean {
+/** The odds of the success roll shared by every order. `difficulty` is 0 (trivial) .. 1 (brutal). */
+function successChance(actors: Person[], skills: (keyof Skills)[], difficulty: number): number {
   const s = starFactor(actorSkill(actors, skills));
-  const chance = Math.max(0.03, Math.min(0.97, 0.18 + s * 0.85 - difficulty * 0.75));
-  return rng.chance(chance);
+  return Math.max(0.03, Math.min(0.97, 0.18 + s * 0.85 - difficulty * 0.75));
+}
+
+/** Success roll shared by every order: one draw against `successChance`. */
+function roll(rng: Rng, actors: Person[], skills: (keyof Skills)[], difficulty: number): boolean {
+  return rng.chance(successChance(actors, skills, difficulty));
 }
 
 function spend(w: WorldState, gang: Gang, amount: number, treatment: 'operating' | 'capital' = 'operating'): boolean {
@@ -193,14 +201,6 @@ export function buildingValue(w: WorldState, b: Building): number {
   return Math.round(base * (0.55 + blk.landValue / 100) * heatDiscount);
 }
 
-export function protectionBase(w: WorldState, b: Building): number {
-  const t = typeOf(b);
-  const blk = w.blocks[b.blockId];
-  const p = t ? Math.max(140, t.profit) : 170;
-  // Enough that a modest racket pays a modest crew, as it does in the original.
-  return Math.round((p * 0.62 + blk.landValue * 5) / 10) * 10;
-}
-
 // ---------------------------------------------------------------- targeting
 
 /** Expand a player/AI selection into the concrete list of buildings to work. */
@@ -210,6 +210,7 @@ export function expandTargets(
   type: OrderType,
   blockIds: ID[],
   buildingIds: ID[],
+  opts?: Pick<OrderOptions, 'recruitKind'>,
 ): ID[] {
   const def = ORDERS[type];
   if (def.target === 'building') return buildingIds.slice(0, 1);
@@ -224,7 +225,7 @@ export function expandTargets(
     if (!blk) continue;
     for (const b of buildingsOfBlock(w, blk)) {
       if (seen.has(b.id)) continue;
-      if (!isValidAreaTarget(w, gangId, type, b)) continue;
+      if (!isValidAreaTarget(w, gangId, type, b, opts)) continue;
       seen.add(b.id);
       out.push(b.id);
     }
@@ -237,6 +238,7 @@ export function isValidAreaTarget(
   gangId: ID,
   type: OrderType,
   b: Building,
+  opts?: Pick<OrderOptions, 'recruitKind'>,
 ): boolean {
   if (b.state === 'destroyed') return false;
   switch (type) {
@@ -255,8 +257,11 @@ export function isValidAreaTarget(
       return !!b.extortRefusedBy?.includes(gangId) && isValidAreaTarget(_w, gangId, 'extort', b);
     case 'explore':
       return b.cls !== 'empty';
-    case 'recruit':
-      return !!typeOf(b)?.recruit;
+    case 'recruit': {
+      // Hoods, accountants and lawyers each keep their own haunts.
+      const kind = typeOf(b)?.recruit;
+      return !!kind && (!opts?.recruitKind || kind === opts.recruitKind);
+    }
     case 'patrol':
     case 'ambush':
       return b.lotId >= 0;
@@ -402,6 +407,34 @@ export function estimateMinutes(w: WorldState, team: Team, order: Order): number
   return Math.round(work / manpower + travel / speed + hunt);
 }
 
+/**
+ * What an order takes out of its crew's week. The crew's week is its people's
+ * time: a job that sends one man of five for eight hours takes a fifth of what
+ * the same job would with the whole crew on it, since the other four are free
+ * for other orders meanwhile (standing orders were always shared out this way).
+ * The computer's crews still plan by the clock alone, as their planner was
+ * balanced against it.
+ */
+export function weekCharge(w: WorldState, team: Team, order: Pick<Order, 'type' | 'opts' | 'estimatedMinutes'>): number {
+  if (ORDERS[order.type].wholeWeek || !w.gangs[team.gangId]?.isPlayer) return order.estimatedMinutes;
+  const bodies = Math.max(1, crewPeople(w, team).filter(p => readyForPlanning(w, p)).length);
+  return Math.round(order.estimatedMinutes * Math.min(bodies, Math.max(1, order.opts.manpower)) / bodies);
+}
+
+/** The week, with the little latitude a lieutenant allows himself. */
+export const WEEK_BUDGET = MINUTES_PER_WEEK * 1.02;
+
+/**
+ * Whether a crew with `committed` of its week spoken for can take an order:
+ * its share of the crew's time must be free, and the job itself, start to
+ * finish, cannot run longer than the week (sixty shops for one man is too
+ * much however many others stand idle).
+ */
+export function fitsWeek(w: WorldState, team: Team, order: Pick<Order, 'type' | 'opts' | 'estimatedMinutes'>, committed: number): boolean {
+  if (!ORDERS[order.type].wholeWeek && order.estimatedMinutes > WEEK_BUDGET) return false;
+  return committed + weekCharge(w, team, order) <= WEEK_BUDGET;
+}
+
 // ---------------------------------------------------------------- week start
 
 function waitForDispatch(w: WorldState, order: Order, reason: string): false {
@@ -450,6 +483,10 @@ function assignOrder(w: WorldState, team: Team, order: Order, atWeekStart = fals
   order.failReason = null;
   delete order.waitReleased;
   delete order.waitResumeState;
+
+  // A man turned round on his way home from the last job leaves that journey
+  // (and the car taking him home, which is then free to be taken again).
+  if (!atWeekStart) for (const p of chosen) { if (p.vehicleKey) alight(w, p); clearDestination(p); }
 
   const tp = targetPos(w, order);
   for (const p of chosen) {
@@ -600,9 +637,15 @@ export function tickOrders(w: WorldState, rng: Rng, minutes: number, loadout: Lo
           allocateTransport(w, team, actors, tp, order.id, order.type);
         let arrived = 0;
         for (const a of actors) {
-          // Chasing a person means re-routing as they move.
-          const boarding=a.vehicleKey&&w.vehicleFleet?.[a.vehicleKey]?.boarding;
-          if (!boarding && def.target === 'person' && (!a.dest || dist(a.dest, tp) > 12)) setDestination(w, a, tp);
+          // Chasing a person means re-routing as they move: when the place he
+          // was sent to is no longer where the man is. A driver's own `dest` is
+          // the stopping point in the lane, which can lie well over 12 m from a
+          // man indoors or behind a parked car: measured against that, the car
+          // was given a new route every minute and circled the city all week.
+          const car = a.vehicleKey ? w.vehicleFleet?.[a.vehicleKey] : undefined;
+          const boarding = !!car?.boarding;
+          const asked = (a.inVehicle ? car?.destination : null) ?? a.dest;
+          if (!boarding && def.target === 'person' && (!a.dest || !asked || dist(asked, tp) > 12)) replanPursuit(w, a, tp);
           else if (!boarding && !a.dest && dist(a.pos, tp) > 6) setDestination(w, a, tp);
           if (stepPerson(a, minutes, trafficContext(w)) || !boarding && !a.inVehicle && dist(a.pos, tp) <= 6) arrived++;
         }
@@ -706,7 +749,7 @@ export function tickOrders(w: WorldState, rng: Rng, minutes: number, loadout: Lo
           const victim = order.targetPersonId != null ? w.people[order.targetPersonId] : null;
           if (victim && onTheStreet(victim) && victim.dest && dist(actors[0].pos, victim.pos) > 12) {
             order.state = 'travelling';
-            for (const a of actors) setDestination(w, a, victim.pos);
+            for (const a of actors) replanPursuit(w, a, victim.pos);
             continue;
           }
         }
@@ -925,9 +968,21 @@ function managerCandidates(team: Team, actors: Person[]): Person[] {
   );
 }
 
-function assignManager(w: WorldState, team: Team, building: Building, actors: Person[]): void {
+/** Installs a manager and says whether anybody was. `fromReserve`: with no
+ * hood of the party able to stay (the lieutenant went himself, his hoods being
+ * out on other jobs), an idle hood from the gang's pool is sent for, rather
+ * than leave the new business with nobody behind the counter. */
+function assignManager(w: WorldState, team: Team, building: Building, actors: Person[], fromReserve = false): boolean {
   const pool = managerCandidates(team, actors);
-  if (!pool.length) return;
+  if (!pool.length && fromReserve) {
+    const gang = w.gangs[team.gangId];
+    for (const id of gang?.poolIds ?? []) {
+      const p = w.people[id];
+      if (p && p.gangId === gang.id && p.role === 'hood' && p.status === 'active' && p.buildingId == null &&
+        p.orderId == null && p.resumeOrderId == null && !p.streetOrder) pool.push(p);
+    }
+  }
+  if (!pool.length) return false;
   pool.sort(
     (a, b) => b.skills.business + b.skills.organization - (a.skills.business + a.skills.organization),
   );
@@ -942,6 +997,9 @@ function assignManager(w: WorldState, team: Team, building: Building, actors: Pe
   mgr.dest = null;
   mgr.path = [];
   building.managerId = mgr.id;
+  const gang = w.gangs[team.gangId];
+  if (gang) gang.poolIds = gang.poolIds.filter((id) => id !== mgr.id);
+  return true;
 }
 
 /** Arm's length between an actor and the person they are dealing with (metres). */
@@ -1000,7 +1058,7 @@ function resolveTarget(
   const miss = (s: string) => { order.results.push(s); missed = s; };
   const refused = (s: string, site: Building) => { (order.refusals ??= []).push({ line: order.results.length, buildingId: site.id }); miss(s); };
   const signUp = (site: Building) => {
-    const base = protectionBase(w, site);
+    const base = protectionFee(site);
     site.protection = { gangId: gang.id, weekly: base, base, refusing: false, grievance: 0 };
     site.knowledge[gang.id] = Math.max(site.knowledge[gang.id] ?? 0, 2);
     delete site.extortRefusedBy;
@@ -1014,8 +1072,12 @@ function resolveTarget(
       if (building.ownerGangId != null) return finishOrder(w, order, 'Somebody else already owns it.');
       if (building.state === 'destroyed' || !purchasablePremisesType(building))
         return finishOrder(w, order, 'Those premises are no longer available to buy.');
+      // The front it stood behind was lost (sold, burnt out) since the order was given.
+      if (centreLotNeedsFront(w, gang.id, building))
+        return finishOrder(w, order, 'You no longer own a business on that block, so the land behind it was not for sale.');
       const cost = buildingValue(w, building);
       if (!spend(w, gang, cost, 'capital')) return finishOrder(w, order, 'You could not cover the asking price.');
+      let staffed: boolean | null = null;
       building.acquisitionCost = cost;
       // 0x4CC8F0: the occupant who sold halves their hostility toward the
       // buyer and loses 64 fear of it.
@@ -1027,9 +1089,15 @@ function resolveTarget(
       building.knowledge[gang.id] = 4;
       if (building.cls !== 'empty' && building.state !== 'damaged' && building.fbiClosedWeek == null) {
         building.state = 'trading';
-        assignManager(w, team, building, actors);
+        // As in the original, whoever bought it stays on to run it.
+        staffed = assignManager(w, team, building, actors, true);
       }
       say(`Bought ${placeName(w, building)} for $${cost.toLocaleString('en-US')}.`);
+      if (staffed) say(`${w.people[building.managerId ?? -1]?.name ?? 'A hood'} stays on to run it.`);
+      else if (staffed === false) {
+        say('Nobody was free to stay and run it: send a hood with Run Business.');
+        report(w, gang.id, 'waiting', `${placeName(w, building)} has nobody running it.`, here, lead.id);
+      }
       reportBusinessMove(w, gang.id, building, 'bought');
       report(w, gang.id, 'waiting', `Acquired ${placeName(w, building)}.`, here, lead.id);
       break;
@@ -1075,7 +1143,10 @@ function resolveTarget(
         front.hidesId = building.id;
         building.cover = coverQuality(t.id, front.typeId);
       }
-      assignManager(w, team, building, actors);
+      if (!assignManager(w, team, building, actors, true)) {
+        say('Nobody was free to stay and run it: send a hood with Run Business.');
+        report(w, gang.id, 'waiting', `The new ${t.name} has nobody running it.`, here, lead.id);
+      }
       say(`Opened a ${t.name}.`);
       reportBusinessMove(w, gang.id, building, 'established');
       report(w, gang.id, 'waiting', `Opened a ${t.name}.`, here, lead.id);
@@ -1360,7 +1431,9 @@ function resolveTarget(
       } else {
         // A failed roll only flags the target in 0x4DE030; no attitude change.
         opinionShift(target, gang.id, -16, { hostility: 0, fear: 0 });
-        miss(`${target.name} would not be moved.`);
+        // Listed with the refusals (red, and a link to the place) when it has premises.
+        if (building) refused(`${target.name} would not be moved.`, building);
+        else miss(`${target.name} would not be moved.`);
       }
       break;
     }
@@ -1425,7 +1498,9 @@ function resolveTarget(
       if (building.state !== 'trading') return finishOrder(w, order, `${placeName(w, building)} is shut; there was nothing worth taking.`);
       const t = typeOf(building);
       const blk = w.blocks[building.blockId];
-      const success = roll(rng, actors, ['stealth', 'firearms'], 0.28 + standingGuards(w, building) * 0.12);
+      const guards = standingGuards(w, building);
+      const odds = successChance(actors, ['stealth', 'firearms'], 0.28 + guards * 0.12);
+      const success = rng.chance(odds);
       recordCrime(w, rng, {
         gangId: gang.id,
         perpetratorId: lead.id,
@@ -1461,7 +1536,15 @@ function resolveTarget(
         if (rng.chance(0.4) && !building.guardIds.includes(-1)) {
           building.guardIds.push(-1); // a police guard now watches the place
         }
-      } else return finishOrder(w, order, `The raid on ${placeName(w, building)} was botched.`);
+      } else {
+        // The report says what went against the crew, not just that it failed.
+        const stars = actorSkill(actors, ['stealth', 'firearms']);
+        const why = guards > 0
+          ? `The place was guarded (${guards} on the door${building.guardIds.includes(-1) ? ', the police among them' : ''})`
+          : stars < 3 ? `The crew is short on stealth and firearms (${stars.toFixed(1)} stars between them)`
+          : 'The luck ran against them';
+        return finishOrder(w, order, `The raid on ${placeName(w, building)} was botched. ${why}; their chances were about ${Math.round(odds * 100)}%.`);
+      }
       break;
     }
 

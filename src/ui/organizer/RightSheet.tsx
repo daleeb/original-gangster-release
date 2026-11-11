@@ -6,6 +6,7 @@ import {
   hireRecruit,
   killMember,
   moveToPool,
+  outOfReach,
   moveToTeam,
   promote,
   sackPerson,
@@ -15,9 +16,10 @@ import {
   transferVehicle,
   transferWeapon,
 } from '../../sim/api';
-import { ORDERS, ORDER_GROUPS, VEHICLES, VEHICLE_ORDER, WEAPONS, WEAPON_ORDER, type OrderDef } from '../../sim/constants';
-import type { ID, OrderType, Person, VehicleId, WeaponId } from '../../sim/types';
-import { buildingName, money } from '../../sim/world';
+import { GANG_COLORS, ORDERS, ORDER_GROUPS, VEHICLES, VEHICLE_ORDER, WEAPONS, WEAPON_ORDER, type OrderDef } from '../../sim/constants';
+import { SKILLS, SKILL_LABELS, type Building, type ID, type OrderType, type Person, type Skill, type VehicleId, type WeaponId } from '../../sim/types';
+import { buildingName, money, placeName } from '../../sim/world';
+import { buildingMapIntel } from '../../sim/mapIntel';
 import { ConfirmDialog, Empty, Hint, Icon, Kicker, Rivets, SkillList, Stamp, Stars } from '../common';
 
 /** Roles that have an engraved glyph of their own. */
@@ -231,8 +233,8 @@ function PoolSheet({ teamId }: { teamId?: ID }) {
     <div {...dropProps} className={`resource-drop${dropOver ? ' drop-over' : ''}`} aria-label="The pool: drag a crew member here to stand him down">
       <div className="row wrap tiny" style={{ gap: 3, marginBottom: 8 }}>
         <span className="muted">Sort:</span>
-        {(['intelligence', 'organization', 'business', 'firearms', 'intimidation', 'stealth'] as const).map((k) => (
-          <button key={k} aria-pressed={sortBy === k} className={`btn sm${sortBy === k ? ' on' : ''}`} onClick={() => setSortBy(k)}>
+        {SKILLS.map((k) => (
+          <button key={k} aria-pressed={sortBy === k} className={`btn sm${sortBy === k ? ' on' : ''}`} title={`Best at ${SKILL_LABELS[k].toLowerCase()} first`} onClick={() => setSortBy(k)}>
             {k.slice(0, 5)}
           </button>
         ))}
@@ -384,15 +386,21 @@ function VehiclesSheet({ teamId }: { teamId: ID }) {
 
 /** The sheet unmounts when it closes; this brings the player back to the same tab. */
 let lastRecruitTab: RecruitTabId = 'hood';
+/** ...and to the same ordering of the recruits ('' = as they were found). */
+let lastRecruitSort: Skill | '' = '';
 
 function RecruitsSheet({ teamId }: { teamId: ID | null }) {
   const sim = useGame((s) => s.sim)!;
   const notify = useGame((s) => s.notify);
   const [tab, setTab] = useState(lastRecruitTab);
+  const [sortBy, setSortByState] = useState<Skill | ''>(lastRecruitSort);
+  const setSortBy = (k: Skill | '') => { lastRecruitSort = k; setSortByState(k); };
   const w = sim.world;
   const gang = sim.playerGang;
   const recruits = gang.recruitIds.map((id) => w.people[id]).filter(Boolean);
-  const shown = recruitsOnTab(recruits, tab);
+  // As they were found, unless a skill is chosen: then the best at it first.
+  const onTab = recruitsOnTab(recruits, tab);
+  const shown = sortBy ? [...onTab].sort((a, b) => b.skills[sortBy] - a.skills[sortBy]) : onTab;
   const openTab = (id: RecruitTabId, list: HTMLElement | null) => {
     lastRecruitTab = id;
     setTab(id);
@@ -407,6 +415,15 @@ function RecruitsSheet({ teamId }: { teamId: ID | null }) {
           </button>
         ))}
       </div>
+      {onTab.length > 1 && (
+        <label className="row tiny recruit-sort" style={{ gap: 6, margin: '8px 0 2px' }}>
+          <span className="muted">Best first at</span>
+          <select aria-label="Order recruits by skill" className="text-input" style={{ flex: 1 }} value={sortBy} onChange={(e) => setSortBy(e.target.value as Skill | '')}>
+            <option value="">no skill: as they were found</option>
+            {(tab === 'hood' ? SKILLS : STAFF_SKILLS).map((k) => <option key={k} value={k}>{SKILL_LABELS[k]}</option>)}
+          </select>
+        </label>
+      )}
       {shown.length === 0 ? (
         <Empty>{RECRUIT_TABS.find((t) => t.id === tab)!.empty}</Empty>
       ) : (
@@ -420,7 +437,7 @@ function RecruitsSheet({ teamId }: { teamId: ID | null }) {
                 <div className="row between">
                   <b style={{ fontWeight: 500, fontSize: 15 }}>{p.name}</b>
                   <span className="muted">
-                    {p.role} · wants {money(p.payDemand)}/week
+                    {sortBy && <><Stars value={p.skills[sortBy]} /> · </>}{p.role} · wants {money(p.payDemand)}/week
                   </span>
                 </div>
                 <div style={{ margin: '5px 0' }}>
@@ -531,7 +548,8 @@ function PersonSheet({ person, teamId }: { person: Person; teamId?: ID }) {
         <button className="btn" onClick={() => setConfirm({ text: `Sack ${person.name}? He goes back on the street, and he will not forget it.`, go: () => notify(act((s) => sackPerson(s.world, gang.id, person.id))!) })}>
           Sack
         </button>
-        <button className="btn danger" onClick={() => setConfirm({ text: `Have ${person.name} killed? The police will not investigate, but the rest of the gang will notice.`, go: () => notify(act((s) => killMember(s.world, gang.id, person.id))!) })}>
+        <button className="btn danger" disabled={!!outOfReach(person)} title={outOfReach(person) ? `${person.name} is ${outOfReach(person)}: nobody of yours can get at him there` : undefined}
+          onClick={() => setConfirm({ text: `Have ${person.name} killed? The police will not investigate, but the rest of the gang will notice.`, go: () => notify(act((s) => killMember(s.world, gang.id, person.id))!) })}>
           Kill
         </button>
         {person.role === 'hood' && person.gangId === gang.id && (person.teamId != null || gang.poolIds.includes(person.id)) && <button
@@ -563,102 +581,192 @@ function PersonSheet({ person, teamId }: { person: Person; teamId?: ID }) {
   );
 }
 
+/** The three skills a person is best at, for a one-line summary. */
+function topSkills(p: Person, n = 3): string {
+  return SKILLS.map((k) => [k, p.skills[k]] as const).sort((a, b) => b[1] - a[1]).slice(0, n)
+    .map(([k, v]) => `${SKILL_LABELS[k]} ${v}`).join(' · ');
+}
+
+/** The clipboard's sections stay as the player left them while the sheet is closed. */
+const clipboardOpen = new Set<string>();
+
+/** One collapsible category of the clipboard: closed until the player opens it. */
+function ClipSection({ id, title, count, color, forceOpen, children }: {
+  id: string; title: string; count: number; color?: string; forceOpen?: boolean; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(() => clipboardOpen.has(id));
+  const shown = open || !!forceOpen;
+  return (
+    <details className="clip-section" open={shown} onToggle={(e) => {
+      const next = e.currentTarget.open;
+      if (next) clipboardOpen.add(id); else clipboardOpen.delete(id);
+      setOpen(next);
+    }}>
+      <summary>
+        {color && <i className="clip-swatch" style={{ background: color }} />}
+        <span className="clip-title" style={color ? { color } : undefined}>{title}</span>
+        <span className="clip-count">{count}</span>
+      </summary>
+      {shown && (count === 0 ? <Empty>Nobody and nothing here yet.</Empty> : children)}
+    </details>
+  );
+}
+
 /**
  * The clipboard: everybody and everywhere you know of, to pick a job card's
- * target from without hunting for it on the map.
+ * target from without hunting for it on the map. As in the original it is a
+ * set of categories (the city's officials, the police, each gang's known
+ * members, the businesses you hold) that open one at a time.
  */
 function ClipboardSheet() {
   const sim = useGame((s) => s.sim)!;
   const jobCard = useGame((s) => s.jobCard);
   const requestCamera = useGame((s) => s.requestCamera);
   const centreOnPerson = useGame((s) => s.centreOnPerson);
+  const selectBuilding = useGame((s) => s.selectBuilding);
   const notify = useGame((s) => s.notify);
   const w = sim.world;
   const gang = sim.playerGang;
   const def = jobCard ? ORDERS[jobCard.type] : null;
+  const pickingPerson = !!jobCard && def?.target === 'person';
+  const pickingSite = !!jobCard && (def?.target === 'building' || def?.target === 'area');
   const selected = new Set(jobCard ? selectedOrderSites(w, gang.id, jobCard) : []);
-  const eligiblePerson = (p: Person) => !jobCard || def?.target !== 'person' || selectableOrderPerson(w, gang.id, jobCard.type, p);
+  const eligiblePerson = (p: Person) => !pickingPerson || selectableOrderPerson(w, gang.id, jobCard!.type, p);
+  const alive = Object.values(w.people).filter((p) => p.status !== 'dead');
+  const byRole = (...roles: string[]) => alive.filter((p) => roles.includes(p.role) && eligiblePerson(p));
 
-  const people = gang.knownPeople
-    .map((id) => w.people[id])
-    .filter((p) => p && p.status !== 'dead' && p.gangId != null && p.gangId !== gang.id && eligiblePerson(p))
-    .slice(0, 30);
-  const OFFICIAL_ROLES = ['mayor', 'policeChief', 'judge', 'da', 'fbiHead', 'reporter', 'clergy', 'police'];
-  const officials = Object.values(w.people)
-    .filter((p) => p.status !== 'dead' && OFFICIAL_ROLES.includes(p.role) && eligiblePerson(p))
-    .sort((a, b) => OFFICIAL_ROLES.indexOf(a.role) - OFFICIAL_ROLES.indexOf(b.role))
-    .slice(0, 40);
-  const ROLE_LABEL: Record<string, string> = {
-    mayor: 'Mayor',
-    policeChief: 'Chief of Police',
-    judge: 'Judge',
-    da: 'District Attorney',
-    fbiHead: 'Bureau chief',
-    reporter: 'Reporter',
-    clergy: 'Clergy',
-    police: 'Officer',
-  };
-  const sites = buildingList(w).filter((b) => (b.ownerGangId === gang.id || b.protection?.gangId === gang.id) &&
-    (!jobCard || def?.target !== 'building' && def?.target !== 'area' || selectableOrderSite(w, gang.id, jobCard, b)));
+  const known = gang.knownPeople.map((id) => w.people[id]).filter((p): p is Person => !!p && p.status !== 'dead' && p.gangId !== gang.id && eligiblePerson(p));
+  const rivals = Object.values(w.gangs).filter((g) => g.id !== gang.id);
+  const unattached = known.filter((p) => p.gangId == null && (p.role === 'hood' || p.role === 'lieutenant'));
+  // Your own people the gang cannot reach: the cells, the courthouse, prison, a rival's back room.
+  const held = alive.filter((p) => p.gangId === gang.id && ['arrested', 'onTrial', 'jailed', 'kidnapped'].includes(p.status));
+  const snitches = w.snitchIds.map((id) => w.people[id]).filter((p): p is Person => !!p && p.status !== 'dead' && eligiblePerson(p));
+
+  const siteOk = (b: Building) => !pickingSite || selectableOrderSite(w, gang.id, jobCard!, b);
+  const sites = buildingList(w).filter((b) => b.state !== 'destroyed' && siteOk(b));
+  const owned = sites.filter((b) => b.ownerGangId === gang.id);
+  const paying = sites.filter((b) => b.protection?.gangId === gang.id && !b.protection.refusing);
+  // Shops that turned down your protection or stopped paying: where Intimidate goes next.
+  const refusers = sites.filter((b) => b.ownerGangId == null && (b.protection?.gangId === gang.id ? b.protection.refusing : !b.protection && !!b.extortRefusedBy?.includes(gang.id)));
 
   const pickPerson = (id: ID) => {
     const p = w.people[id];
-    if (def?.target === 'person') {
+    if (!p) return;
+    if (pickingPerson) {
       handleMapHit({ personId: id, buildingId: null, blockId: null, point: p.pos });
       notify(`${p.name} is the target.`);
-    } else if (p) centreOnPerson(id);
+    } else centreOnPerson(id);
   };
   const pickSite = (id: ID) => {
     const b = w.buildings[id];
+    if (!b) return;
     if (def?.target === 'building') {
       handleMapHit({ personId: null, buildingId: id, blockId: b.blockId, point: w.lots[b.lotId].center }, { site: true });
       notify(`${buildingName(w, id)} is the target.`);
     } else if (def?.target === 'area') {
       handleMapHit({ personId: null, buildingId: id, blockId: b.blockId, point: w.lots[b.lotId].center }, { site: true });
-    } else if (b) {
+    } else {
       const lot = w.lots[b.lotId];
+      if (!jobCard) selectBuilding(id);
       requestCamera({ x: lot.center.x, y: lot.center.y });
     }
   };
 
+  const personRow = (p: Person, note: string, opts: { color?: string; skills?: boolean } = {}) => (
+    <button key={p.id} className={`list-row clip-row${jobCard?.personId === p.id ? ' on' : ''}`} onClick={() => pickPerson(p.id)}
+      title={pickingPerson ? 'Make this person the target' : 'Show on the map'}>
+      <span className="name" style={opts.color ? { color: opts.color } : undefined}>
+        <span>{ROLE_ICON.has(p.role) && <Icon name={`roles/${p.role}`} size={13} />} {p.name}</span>
+        {opts.skills && <span className="clip-skills">{topSkills(p)}</span>}
+      </span>
+      <span className="muted">{note}</span>
+    </button>
+  );
+  const official = (p: Person, label: string) => personRow(p, `${label}${p.bribedBy === gang.id ? ' · on your payroll' : p.employedBy === gang.id ? ' · on your payroll' : ''}`);
+  const siteRow = (b: Building, note: string) => (
+    <button key={b.id} className={`list-row clip-row${selected.has(b.id) ? ' on' : ''}`} onClick={() => pickSite(b.id)}
+      title={pickingSite ? 'Make this site a target' : 'Show on the map'}>
+      <span className="name">{placeName(w, b)}</span>
+      <span className="muted">{note}</span>
+    </button>
+  );
+  const absent = (p: Person) => p.status === 'kidnapped' ? 'held by another gang' : p.status === 'jailed' ? `in prison${p.jailWeeks > 0 ? ` · ${p.jailWeeks} wk` : ''}` : p.status === 'onTrial' ? 'on trial' : 'awaiting trial';
+
+  const mayor = byRole('mayor'), das = byRole('da'), judges = byRole('judge');
+  const chief = byRole('policeChief'), officers = byRole('police');
+  const bureau = byRole('fbiHead'), press = byRole('reporter'), clergy = byRole('clergy');
+  // With a card looking for a target, the categories that hold one start open.
+  const want = (n: number, kind: 'person' | 'site') => n > 0 && n <= 12 && (kind === 'person' ? pickingPerson : pickingSite);
+
   return (
-    <>
-      <Kicker style={{ marginBottom: 6 }}>People you know · {people.length}</Kicker>
-      {people.length === 0 ? (
-        <Empty>You know nothing of your rivals' people. Explore, or buy from a snitch.</Empty>
-      ) : (
-        people.map((p) => (
-          <button key={p.id} className={`list-row${jobCard?.personId === p.id ? ' on' : ''}`} onClick={() => pickPerson(p.id)}>
-            <span className="name">{p.name}</span>
-            <span className="muted">
-              {w.gangs[p.gangId!]?.name} · {p.role}
-            </span>
-          </button>
-        ))
-      )}
-      <Kicker style={{ margin: '14px 0 6px' }}>Officials · {officials.length}</Kicker>
-      {officials.map((p) => (
-        <button key={p.id} className={`list-row${jobCard?.personId === p.id ? ' on' : ''}`} onClick={() => pickPerson(p.id)}>
-          <span className="name">
-            <Icon name={`roles/${p.role}`} size={13} /> {p.name}
-          </span>
-          <span className="muted">
-            {ROLE_LABEL[p.role] ?? p.role}
-            {p.bribedBy === gang.id ? ' · on your payroll' : ''}
-          </span>
-        </button>
-      ))}
-      <Kicker style={{ margin: '14px 0 6px' }}>Your sites · {sites.length}</Kicker>
-      {sites.length === 0 ? (
-        <Empty>Nothing yet.</Empty>
-      ) : (
-        sites.slice(0, 60).map((b) => (
-          <button key={b.id} className={`list-row${selected.has(b.id) ? ' on' : ''}`} onClick={() => pickSite(b.id)}>
-            <span className="name">{buildingName(w, b.id)}</span>
-            <span className="muted">{b.ownerGangId === gang.id ? 'owned' : `${money(b.protection?.weekly ?? 0)}/wk`}</span>
-          </button>
-        ))
-      )}
-    </>
+    <div className="clipboard">
+      <div className="muted tiny" style={{ marginBottom: 8 }}>
+        {jobCard ? 'Only what this order can target is listed. Open a category and click a name.' : 'Open a category; click a name to find it on the map.'}
+      </div>
+
+      {(!jobCard || pickingPerson) && <>
+        <Kicker style={{ margin: '4px 0 4px' }}>The city</Kicker>
+        <ClipSection id="cityHall" title="City Hall" count={mayor.length} forceOpen={want(mayor.length, 'person')}>
+          {mayor.map((p) => official(p, 'Mayor'))}
+        </ClipSection>
+        <ClipSection id="courts" title="District Attorneys and Judges" count={das.length + judges.length} forceOpen={want(das.length + judges.length, 'person')}>
+          {das.map((p) => official(p, 'District Attorney'))}
+          {judges.map((p) => official(p, 'Judge'))}
+        </ClipSection>
+        <ClipSection id="police" title="Police" count={chief.length + officers.length}>
+          {chief.map((p) => official(p, 'Chief of Police'))}
+          {officers.map((p) => official(p, 'Officer'))}
+        </ClipSection>
+        <ClipSection id="bureau" title="The Bureau" count={bureau.length}>
+          {bureau.map((p) => official(p, 'Bureau chief'))}
+        </ClipSection>
+        <ClipSection id="press" title="Journalists" count={press.length}>
+          {press.map((p) => official(p, 'Reporter'))}
+        </ClipSection>
+        <ClipSection id="clergy" title="Churches and charities" count={clergy.length}>
+          {clergy.map((p) => official(p, 'Clergy'))}
+        </ClipSection>
+        <ClipSection id="snitches" title="Informers" count={snitches.length}>
+          {snitches.map((p) => personRow(p, 'Snitch'))}
+        </ClipSection>
+
+        <Kicker style={{ margin: '12px 0 4px' }}>Gang members you know</Kicker>
+        {rivals.map((r) => {
+          const members = known.filter((p) => p.gangId === r.id);
+          return (
+            <ClipSection key={r.id} id={`gang${r.id}`} title={`${r.name}${r.eliminated ? ' · wiped out' : ''}`} count={members.length}
+              color={GANG_COLORS[r.color].hex} forceOpen={want(members.length, 'person')}>
+              {members.map((p) => personRow(p, p.role, { color: GANG_COLORS[r.color].hex, skills: true }))}
+            </ClipSection>
+          );
+        })}
+        <ClipSection id="unattached" title="Unaffiliated hoods" count={unattached.length}>
+          {unattached.map((p) => personRow(p, gang.recruitIds.includes(p.id) ? 'willing to work' : 'works for nobody', { skills: true }))}
+        </ClipSection>
+        {!jobCard && <ClipSection id="held" title="Your people behind bars or held" count={held.length} color={GANG_COLORS[gang.color].hex}>
+          {held.map((p) => personRow(p, absent(p), { color: GANG_COLORS[gang.color].hex }))}
+        </ClipSection>}
+      </>}
+
+      {(!jobCard || pickingSite) && <>
+        <Kicker style={{ margin: '12px 0 4px' }}>Businesses</Kicker>
+        <ClipSection id="owned" title="Owned by you" count={owned.length} color={GANG_COLORS[gang.color].hex} forceOpen={want(owned.length, 'site')}>
+          {owned.map((b) => siteRow(b, b.managerId != null ? `run by ${w.people[b.managerId]?.name ?? 'a manager'}` : b.cls === 'empty' ? 'empty land' : 'no manager'))}
+        </ClipSection>
+        <ClipSection id="paying" title="Paying you protection" count={paying.length} forceOpen={want(paying.length, 'site')}>
+          {paying.map((b) => siteRow(b, `${money(b.protection?.weekly ?? 0)}/wk`))}
+        </ClipSection>
+        <ClipSection id="refusers" title="Refusing you" count={refusers.length} forceOpen={want(refusers.length, 'site')}>
+          {refusers.map((b) => siteRow(b, b.protection ? 'stopped paying' : 'turned you down'))}
+        </ClipSection>
+        {pickingSite && (() => {
+          // Everything else the order could go to, nearest your territory first is the map's job; here by name.
+          const others = sites.filter((b) => !owned.includes(b) && !paying.includes(b) && !refusers.includes(b));
+          return <ClipSection id="others" title="Other valid targets" count={others.length}>
+            {others.slice(0, 120).map((b) => siteRow(b, w.gangs[buildingMapIntel(b, gang.id).ownerGangId ?? -1]?.name ?? ''))}
+          </ClipSection>;
+        })()}
+      </>}
+    </div>
   );
 }

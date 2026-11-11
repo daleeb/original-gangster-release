@@ -5,6 +5,7 @@ import type { PickResult } from '../render/scene';
 import { CELL, GANG_COLORS, ORDERS, STREET_WIDTH } from '../sim/constants';
 import { activeBlocks, lotRect, streetEdgeOpen, streetName } from '../sim/cityLayout';
 import { orderPeopleBySite, selectableOrderSite, selectedOrderSites } from '../app/orderSelection';
+import { siteBuilding } from '../sim/premises';
 import { plannedCrimeBlocks, specialistPeopleBySite } from '../app/specialistSelection';
 import { specialistTargetEligible } from '../sim/specialistJobs';
 import { buildingMapIntel, knownBlockOwners } from '../sim/mapIntel';
@@ -267,7 +268,9 @@ export function Blueprint() {
           const lot = w.lots[lotId], b = w.buildings[lot.buildingId];
           if (!b) continue;
           const lr = toPlanRect(blk, lotRect(lot)), lx = X(lr.x), ly = Y(lr.y), ls = S(lr.w);
-          drawPlanLot(ctx, w, b, lx, ly, ls, gang.id, validSites.has(b.id), pickedSites.has(b.id), heat != null, S(lr.h));
+          // An apartment block's terraces are drawn and marked with its tenement.
+          const site = siteBuilding(w, b);
+          drawPlanLot(ctx, w, b, lx, ly, ls, gang.id, validSites.has(site.id), pickedSites.has(site.id), heat != null, S(lr.h), site);
           const intel = buildingMapIntel(b, gang.id);
           if (!intel.siteKnown || b.state === 'destroyed') continue;
           const icon = intel.isHQ ? 'hq' : planIcon(b);
@@ -279,7 +282,7 @@ export function Blueprint() {
             color: intel.isHQ && intel.ownerGangId != null ? GANG_COLORS[w.gangs[intel.ownerGangId].color].hex : '#4e635b' });
         }
         const tint = heat ? overlayTint(w, blk, heat, gang.id, events) : null;
-        if (tint) { ctx.fillStyle = tint; ctx.globalAlpha = .72; ctx.fillRect(x, y, s, h); ctx.globalAlpha = 1; }
+        if (tint && tint.alpha > 0) { ctx.fillStyle = tint.color; ctx.globalAlpha = tint.alpha; ctx.fillRect(x, y, s, h); ctx.globalAlpha = 1; }
         if (showLt && !policeArea && (ltBlocks.has(blk.id) || areaChoices?.other.has(blk.id))) {
           const mine = ltBlocks.has(blk.id), color = mine ? '#ffffff' : GANG_COLORS[gang.color].hex;
           ctx.fillStyle = color; ctx.globalAlpha = mine ? .55 : .24; ctx.fillRect(x, y, s, h); ctx.globalAlpha = 1;
@@ -303,11 +306,17 @@ export function Blueprint() {
           if (streetEdgeOpen(w, x, y, x + 1, y)) street(streetName(w, 'ew', y), X((x + .5) * CELL), Y(y * CELL), false);
       }
       markerHits.current = drawPlanMarkers(ctx, markers);
-      if (selectedBuildingId != null) {
+      // While a card is choosing targets only its own selection is marked.
+      if (selectedBuildingId != null && !jobCard && !staff) {
         const b = w.buildings[selectedBuildingId];
         if (b && buildingMapIntel(b, gang.id).siteKnown) {
-          const r = toPlanRect(w.blocks[b.blockId], lotRect(w.lots[b.lotId]));
-          drawPlanSelection(ctx, X(r.x), Y(r.y), S(r.w), S(r.h));
+          // Every lot that is part of it (an apartment block's terraces with its tenement).
+          for (const lotId of w.blocks[b.blockId]?.lotIds ?? []) {
+            const part = w.buildings[w.lots[lotId].buildingId];
+            if (!part || siteBuilding(w, part).id !== b.id) continue;
+            const r = toPlanRect(w.blocks[b.blockId], lotRect(w.lots[lotId]));
+            drawPlanSelection(ctx, X(r.x), Y(r.y), S(r.w), S(r.h));
+          }
         }
       }
       if (staff && !policeArea) for (const p of peopleList(w)) if (specialistTargetEligible(w, gang.id, staff.type, p)) {
@@ -687,11 +696,19 @@ function openingView(w: WorldState, area: MapArea, gangId: ID): View {
   return { zoom, panX: area.x + area.w / 2 - f.ox - pos.x * f.scale, panY: area.y + area.h / 2 - f.oy - pos.y * f.scale };
 }
 
-function overlayTint(w: WorldState, blk: Block, overlay: HeatKey, gangId: ID, events: Map<ID, number> | null): string {
+/** The wash laid over a block. Land value, security and opinion colour the
+ * whole city; crime and recent events are spots, so a quiet block is left as
+ * it is drawn and only the blocks where something happened are painted. */
+function overlayTint(w: WorldState, blk: Block, overlay: HeatKey, gangId: ID, events: Map<ID, number> | null): { color: string; alpha: number } {
   const legend = HEAT_LEGENDS[overlay];
-  if (overlay === 'landValue') return mixColor(legend.start, legend.end, blk.landValue / 100);
-  if (overlay === 'crime') return mixColor(legend.start, legend.end, blk.crimeHeat / 60);
-  if (overlay === 'security') return mixColor(legend.start, legend.end, blk.policePresence / 6);
+  const wash = (color: string) => ({ color, alpha: .72 });
+  const spot = (amount: number) => {
+    const t = Math.max(0, Math.min(1, amount));
+    return { color: mixColor(legend.start, legend.end, .35 + .65 * t), alpha: t <= 0 ? 0 : .5 + .35 * t };
+  };
+  if (overlay === 'landValue') return wash(mixColor(legend.start, legend.end, blk.landValue / 100));
+  if (overlay === 'crime') return spot(blk.crimeHeat / 60);
+  if (overlay === 'security') return wash(mixColor(legend.start, legend.end, blk.policePresence / 6));
   if (overlay === 'hostility') {
     let total = 0;
     let n = 0;
@@ -703,11 +720,11 @@ function overlayTint(w: WorldState, blk: Block, overlay: HeatKey, gangId: ID, ev
       n++;
     }
     const avg = n ? total / n : 0;
-    return avg >= 0
+    return wash(avg >= 0
       ? mixColor('#ede5d2', legend.end, avg / 100)
-      : mixColor('#ede5d2', legend.start, -avg / 100);
+      : mixColor('#ede5d2', legend.start, -avg / 100));
   }
-  return mixColor(legend.start, legend.end, (events?.get(blk.id) ?? 0) / 4);
+  return spot((events?.get(blk.id) ?? 0) / 4);
 }
 
 function mixColor(a: string, b: string, amount: number): string {

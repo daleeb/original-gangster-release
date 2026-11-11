@@ -151,14 +151,20 @@ export function DiplomacyTab() {
 
       <Panel title="Snitches">
         <Hint>
-          One snitch a week, no more. They sell names, never places — and they never name anybody you
-          already know.
+          A snitch sells you the names of people you have not identified: a rival gang's members, or the
+          unattached hoods about town (worth knowing before you recruit). Named people appear on the Clipboard
+          and can be made the target of an order. Choose whose names you want, then the snitch to buy them from:
+          the price is for the names asked for, whichever snitch you use. One purchase a week; they sell names,
+          never places, and never anybody you already know.
         </Hint>
         <div className="row wrap" style={{ gap: 4, marginBottom: 8 }}>
           {rivals.map((r) => (
             <button
               key={r.id}
               className={`btn sm${snitchTargets.includes(r.id) ? ' on' : ''}`}
+              aria-pressed={snitchTargets.includes(r.id)}
+              title={`Names of ${r.name} members you have not identified`}
+              style={{ borderBottom: `3px solid ${GANG_COLORS[r.color].hex}` }}
               onClick={() =>
                 setSnitchTargets(
                   snitchTargets.includes(r.id)
@@ -172,6 +178,8 @@ export function DiplomacyTab() {
           ))}
           <button
             className={`btn sm${snitchTargets.includes(0) ? ' on' : ''}`}
+            aria-pressed={snitchTargets.includes(0)}
+            title="Names of hoods who work for nobody: the people a Recruit order can bring in"
             onClick={() =>
               setSnitchTargets(
                 snitchTargets.includes(0) ? snitchTargets.filter((x) => x !== 0) : [...snitchTargets, 0],
@@ -181,11 +189,13 @@ export function DiplomacyTab() {
             Unaffiliated
           </button>
         </div>
-        {snitchTargets.length > 0 && (
+        {snitchTargets.length > 0 ? (
           <div className="row between tiny" style={{ marginBottom: 6 }}>
-            <span className="muted">Asking price</span>
+            <span className="muted">Asking price{price > gang.cash ? ' — more than you have' : ''}</span>
             <b className="mono">{money(price)}</b>
           </div>
+        ) : (
+          <div className="muted tiny" style={{ marginBottom: 6 }}>Choose at least one gang above, or Unaffiliated, to get a price.</div>
         )}
         {snitches.map((s) => (
           <div key={s.id} className="row between" style={{ padding: '3px 0' }}>

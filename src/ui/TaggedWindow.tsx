@@ -4,6 +4,7 @@ import { act, useGame } from '../app/store';
 import { cancelOrder, clearStreetOrder, leaveVehicle, returnToBase, setWaiting } from '../sim/api';
 import { ORDERS } from '../sim/constants';
 import { cargoActivity, goodsTotal } from '../sim/cargo';
+import { restingStatus } from '../sim/transport';
 import { taggedViewApi } from './CityView';
 import { Portrait } from './Portrait';
 import { bossInsideOffice } from '../render/characterPresentation';
@@ -45,7 +46,7 @@ export function TaggedWindow({id}: {id: number}) {
     person.streetOrder?.type === 'tail' ? 'Watching' : 'Attacking' : null;
   const orderName = person.streetOrder
     ? ({ goTo: 'Go to', kill: 'Kill', assault: 'Assault', tail: 'Tail' }[person.streetOrder.type] ?? person.streetOrder.type)
-    : cargoActivity(w,person) ?? (order ? ORDERS[order.type].name : staff ? SPECIALIST_JOB_NAMES[staff.type] : person.dest ? 'Travelling' : 'Idle');
+    : cargoActivity(w,person) ?? (order ? ORDERS[order.type].name : staff ? SPECIALIST_JOB_NAMES[staff.type] : restingStatus(w, person));
   const cargo=person.vehicleKey?w.vehicleFleet?.[person.vehicleKey]?.cargo:undefined;
   const command = (kind: 'kill' | 'assault' | 'tail' | 'goTo') => {
     setPickMode({ kind: 'streetOrder', orderType: kind, personIds: [person.id] });

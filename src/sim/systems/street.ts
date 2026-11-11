@@ -8,6 +8,7 @@ import { absoluteMinute, UNDER_FIRE_MINUTES } from './combat';
 import { clearDestination, setDestination, stepPerson } from '../movement';
 import { trafficContext } from '../traffic';
 import { prepareStreetPursuit, streetOrderRange } from '../streetPursuit';
+import { sendHome } from '../transport';
 import type { Rng } from '../rng';
 import type { Person, WorldState } from '../types';
 import { closeCombatBlow, endCloseCombat, meleeWeapon, spendLostTurn, type Blow } from '../closeCombat';
@@ -18,6 +19,13 @@ import { peopleList } from '../entityLists';
  * Orders given directly to hoods during the working week: kill, assault, tail
  * and go-to. They pre-empt whatever the lieutenant had planned.
  */
+/** His street order is done (the man is dead, beaten or gone). With a planned
+ * order to go back to he rejoins it (execution.ts); otherwise he makes for the
+ * office, as the original's men did, rather than stand where it ended. */
+function standDown(w: WorldState, p: Person): void {
+  if (p.gangId != null && p.status === 'active' && p.orderId == null && p.resumeOrderId == null && !p.streetOrder) sendHome(w, p);
+}
+
 export function tickStreetOrders(w: WorldState, rng: Rng, minutes: number, loadout: Loadout = allocateWeapons(w)): void {
   if (minutes <= 0) return;
   for (const p of peopleList(w)) {
@@ -47,6 +55,7 @@ export function tickStreetOrders(w: WorldState, rng: Rng, minutes: number, loado
     if (!target || (target.status !== 'active' && target.status !== 'beaten')) {
       p.streetOrder = null;
       clearDestination(p);
+      standDown(w, p);
       continue;
     }
 
@@ -78,7 +87,7 @@ export function tickStreetOrders(w: WorldState, rng: Rng, minutes: number, loado
         killPerson(w, target, 'killed in close combat');
         recordCrime(w, rng, { gangId: p.gangId, perpetratorId: p.id, type: 'streetKill', pos: target.pos, victimId: target.id, severity: 10 });
         addMessage(w, 'combat', `${target.name} was killed in close combat by ${p.name}.`, target.pos, p.id);
-        endCloseCombat(p); p.streetOrder = null;
+        endCloseCombat(p); p.streetOrder = null; standDown(w, p);
       } else if (blow && !blow.hit) {
         recordCrime(w, rng, { gangId: p.gangId, perpetratorId: p.id, type: 'streetAssault', pos: p.pos, severity: 5 });
       }
@@ -121,7 +130,7 @@ export function tickStreetOrders(w: WorldState, rng: Rng, minutes: number, loado
             severity: 10,
           });
           addMessage(w, 'combat', `${target.name} was ${weapon ? 'shot dead' : 'killed in close combat'} by ${p.name}.`, target.pos, p.id, weapon ? 'gunshot' : undefined);
-          p.streetOrder = null;
+          p.streetOrder = null; standDown(w, p);
         } else if (w.gangs[p.gangId]?.isPlayer) {
           addMessage(w, 'combat', weapon ? `${p.name} shot ${target.name}, who is wounded but still standing.`
             : `${p.name} struck ${target.name} — ${Math.ceil(target.hp)} hp remaining.`, target.pos, p.id, weapon ? 'gunshot' : undefined);
@@ -148,7 +157,7 @@ export function tickStreetOrders(w: WorldState, rng: Rng, minutes: number, loado
         killPerson(w, target, 'beaten to death');
         recordCrime(w, rng, { gangId: p.gangId, perpetratorId: p.id, type: 'streetKill', pos: target.pos, victimId: target.id, severity: 10 });
         addMessage(w, 'combat', `${target.name} died from a beating by ${p.name}.`, target.pos, p.id);
-        endCloseCombat(p); p.streetOrder = null;
+        endCloseCombat(p); p.streetOrder = null; standDown(w, p);
         continue;
       }
       if (!blow.hit) {
@@ -173,7 +182,7 @@ export function tickStreetOrders(w: WorldState, rng: Rng, minutes: number, loado
       });
       addMessage(w, 'combat', `${p.name} gave ${target.name} a beating.`, target.pos, p.id);
       endCloseCombat(p);
-      p.streetOrder = null;
+      p.streetOrder = null; standDown(w, p);
     }
   }
 }

@@ -28,12 +28,12 @@ import {
 import { MAX_TEAMS, MAX_TEAM_SIZE, MINUTES_PER_WEEK, WEAPONS } from './constants';
 import { BUILDING_BY_ID, ILLEGAL_TYPES, coverQuality } from './data/buildings';
 import { isValidAreaTarget, nearestOffice } from './execution';
-import { purchasablePremisesType } from './premises';
+import { centreLotNeedsFront, purchasablePremisesType } from './premises';
 import { buildingMapIntel } from './mapIntel';
 import type { Rng } from './rng';
 import { campaignWeeklyCost, canRunForOffice, electionBlocksRequired } from './systems/politics';
 import { originalElectionPoll } from './originalElection';
-import type { Block, Building, Gang, ID, WorldState } from './types';
+import type { Block, Building, Gang, ID, Team, WorldState } from './types';
 import {
   allBuildings,
   buildingsOfBlock,
@@ -51,6 +51,11 @@ import { peopleList } from './entityLists';
 import { quitGangPayroll } from './payrollMark';
 
 /** Blocks within `radius` of anywhere the gang already has a presence. */
+/** How long a crew's orders run end to end: what the planner fills the week by. */
+function clockTime(w: WorldState, team: Team): number {
+  return team.orderIds.reduce((sum, id) => sum + (w.orders[id]?.estimatedMinutes ?? 0), 0);
+}
+
 function homeBlocks(w: WorldState, gang: Gang, radius: number): Block[] {
   const seeds = new Set<number>();
   for (const b of allBuildings(w)) {
@@ -140,7 +145,7 @@ export function planGang(w: WorldState, rng: Rng, gang: Gang, autopilot = false)
 
   teams.forEach((team, idx) => {
     let guard = 0;
-    const canDoMore = () => team.timeUsed < MINUTES_PER_WEEK * 0.9 && guard++ < 8;
+    const canDoMore = () => clockTime(w, team) < MINUTES_PER_WEEK * 0.9 && guard++ < 8;
 
     // 1. Always collect what is owed.
     if (protectedSites.length && canDoMore()) {
@@ -248,7 +253,7 @@ export function planGang(w: WorldState, rng: Rng, gang: Gang, autopilot = false)
     }
 
     // 7. Spend what is left holding the streets.
-    if (team.timeUsed < MINUTES_PER_WEEK * 0.45) {
+    if (clockTime(w, team) < MINUTES_PER_WEEK * 0.45) {
       const mine = territoryBlocks(w, gang.id);
       if (mine.length) {
         const patrolBlocks = rng.shuffle([...mine]).slice(0, 6).map((b) => b.id);
@@ -657,6 +662,8 @@ function manageProperty(w: WorldState, rng: Rng, gang: Gang, teamIds: ID[]): voi
     for (const b of buildingsOfBlock(w, blk)) {
       if (b.ownerGangId != null || b.state === 'destroyed') continue;
       if (!purchasablePremisesType(b)) continue;
+      // The middle of a block is only sold to the owner of one of its fronts.
+      if (centreLotNeedsFront(w, gang.id, b)) continue;
       // The order's own reach, not the square round the gang's blocks.
       if (!nearTerritory(w, gang.id, b.blockId, BUY_REACH_BLOCKS)) continue;
       candidates.push(b);

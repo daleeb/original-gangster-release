@@ -7,13 +7,15 @@ import {
   interrogatePrisoner,
   killMember,
   killPrisoner,
+  outOfReach,
   releasePrisoner,
   repeatOrder,
   sackPerson,
 } from '../../sim/api';
 import { MINUTES_PER_WEEK, ORDERS, ORDER_GROUPS } from '../../sim/constants';
 import type { ID, Order, Team, WorldState } from '../../sim/types';
-import { buildingName, money } from '../../sim/world';
+import { buildingName, money, placeName } from '../../sim/world';
+import { buildingMapIntel } from '../../sim/mapIntel';
 import { ConfirmDialog, Dial, Empty, Hint, Icon, Kicker, Pill, SkillList, Stamp } from '../common';
 import { Portrait } from '../Portrait';
 import { resourceDragProps, useResourceDrop } from '../resourceDrag';
@@ -29,16 +31,36 @@ const GROUP_BLURB: Record<(typeof ORDER_GROUPS)[number]['id'], string> = {
   violent: 'Assault, smash up, arson, bombing',
 };
 
+/** What an order is aimed at, by name: the place itself where it has one or
+ * two, and how many more besides (the journal used to say only "block 3,4"). */
 function describeTargets(o: Order, w: WorldState): string {
   if (o.targetPersonId != null) return w.people[o.targetPersonId]?.name ?? 'somebody';
-  if (o.targetBuildingIds.length === 1) return buildingName(w, o.targetBuildingIds[0]);
+  const sites = o.targetBuildingIds.map((id) => w.buildings[id]).filter(Boolean);
+  if (sites.length === 1) return placeName(w, sites[0]);
+  if (sites.length > 1) {
+    const kinds = [...new Set(sites.map((b) => buildingName(w, b.id)))];
+    const named = kinds.slice(0, 2).join(', ');
+    return `${sites.length} sites: ${named}${kinds.length > 2 ? ` and ${kinds.length - 2} other kind${kinds.length - 2 === 1 ? '' : 's'}` : ''}`;
+  }
   if (o.targetBlockIds.length === 1) {
     const b = w.blocks[o.targetBlockIds[0]];
     return b ? `block ${b.gx},${b.gy}` : 'a block';
   }
   if (o.targetBlockIds.length) return `${o.targetBlockIds.length} blocks`;
-  if (o.targetBuildingIds.length) return `${o.targetBuildingIds.length} sites`;
   return 'a place';
+}
+
+/** Every site of an order with who holds it, as far as this gang knows: the tooltip of its journal line. */
+function targetDetails(o: Order, w: WorldState, gangId: ID): string {
+  const lines = o.targetBuildingIds.map((id) => w.buildings[id]).filter(Boolean).slice(0, 14).map((b) => {
+    const intel = buildingMapIntel(b, gangId);
+    const owner = b.ownerPersonId != null && intel.siteKnown ? w.people[b.ownerPersonId]?.name : undefined;
+    const holder = intel.ownerGangId != null ? `owned by ${intel.ownerGangId === gangId ? 'you' : w.gangs[intel.ownerGangId]?.name}`
+      : intel.protectionGangId != null ? `pays ${intel.protectionGangId === gangId ? 'you' : w.gangs[intel.protectionGangId]?.name}` : 'independent';
+    return `${placeName(w, b)} · ${holder}${owner ? ` · ${owner}` : ''}`;
+  });
+  if (o.targetBuildingIds.length > 14) lines.push(`…and ${o.targetBuildingIds.length - 14} more`);
+  return lines.length ? `${lines.join('\n')}\n\nClick to show on the map.` : 'Click to show on the map.';
 }
 
 /**
@@ -95,6 +117,7 @@ export function LieutenantsTab() {
   const pickMode = useGame((s) => s.pickMode);
   const beginOrder = useGame((s) => s.beginOrder);
   const updateJobCard = useGame((s) => s.updateJobCard);
+  const reviewOrderId = useGame((s) => s.reviewOrderId);
   useGame((s) => s.version);
 
   const [mode, setMode] = useState<Mode>('orders');
@@ -110,6 +133,8 @@ export function LieutenantsTab() {
   // the week, so always fall back to one that still exists.
   const team = (selectedTeamId != null ? w.teams[selectedTeamId] : undefined) ?? teams[0];
   const [dropProps, dropOver] = useResourceDrop(team ? { kind: 'team', teamId: team.id } : null);
+  // The map stops marking an order once the page moves on to another crew or to the reports.
+  useEffect(() => () => useGame.getState().setReviewOrder(null), [team?.id, mode]);
 
   if (!team) {
     return (
@@ -143,6 +168,21 @@ export function LieutenantsTab() {
       const t = s.world.teams[team.id];
       if (t) t.name = name.slice(0, 24);
     });
+
+  /** Show an order's target on the map: its area is marked, the view goes to it, and a single site opens its panel. */
+  const showOrder = (o: Order) => {
+    const state = useGame.getState();
+    if (reviewOrderId === o.id) { state.setReviewOrder(null); return; }
+    state.setReviewOrder(o.id);
+    const site = w.buildings[o.targetBuildingIds[0]];
+    const person = o.targetPersonId != null ? w.people[o.targetPersonId] : null;
+    if (site) {
+      if (o.targetBuildingIds.length === 1 && buildingMapIntel(site, gang.id).siteKnown) state.selectBuilding(site.id);
+      state.requestCamera({ ...w.lots[site.lotId].center });
+    } else if (person) state.centreOnPerson(person.id);
+    else if (o.targetPos) state.requestCamera({ ...o.targetPos });
+    else if (o.targetBlockIds.length && w.blocks[o.targetBlockIds[0]]) state.requestCamera({ ...w.blocks[o.targetBlockIds[0]].center });
+  };
 
   /** Re-open a confirmed order on a job card, as the original's Edit Order did. */
   const editOrder = (o: Order) => {
@@ -211,7 +251,8 @@ export function LieutenantsTab() {
             <button className="btn" onClick={() => setConfirm({ text: `Sack ${lt.name}? The team goes back to the pool, and he goes back on the street with a grudge.`, go: () => notify(act((s) => sackPerson(s.world, gang.id, lt.id))!) })}>
               Sack
             </button>
-            <button className="btn danger" onClick={() => setConfirm({ text: `Have ${lt.name} killed? The police will not look into it, but your other lieutenants will want more money.`, go: () => notify(act((s) => killMember(s.world, gang.id, lt.id))!) })}>
+            <button className="btn danger" disabled={!!outOfReach(lt)} title={outOfReach(lt) ? `${lt.name} is ${outOfReach(lt)}: nobody of yours can get at him there` : undefined}
+              onClick={() => setConfirm({ text: `Have ${lt.name} killed? The police will not look into it, but your other lieutenants will want more money.`, go: () => notify(act((s) => killMember(s.world, gang.id, lt.id))!) })}>
               Kill
             </button>
             <button className="btn" title="Send the lieutenant and the team back to the pool" onClick={() => setConfirm({ text: `Demote ${lt.name}? His crew goes back to the pool, its orders are cancelled, and its weapons and cars go back to the cache.`, go: () => notify(act((s) => demote(s.world, gang.id, team.id))!) })}>
@@ -323,7 +364,12 @@ export function LieutenantsTab() {
                   {orders.map((o) => (
                     <div key={o.id} className="row between report-item">
                       <span>
-                        <Icon name={`orders/${o.type}`} size={15} /> <b style={{ fontWeight: 500 }}>{ORDERS[o.type].name}</b> · {describeTargets(o, w)}
+                        <Icon name={`orders/${o.type}`} size={15} /> <b style={{ fontWeight: 500 }}>{ORDERS[o.type].name}</b> ·{' '}
+                        <button className={`order-target-link${reviewOrderId === o.id ? ' on' : ''}`} aria-pressed={reviewOrderId === o.id}
+                          title={targetDetails(o, w, gang.id)} onClick={() => showOrder(o)}>
+                          {describeTargets(o, w)}
+                        </button>
+                        {o.type === 'recruit' && o.opts.recruitKind && ` · ${o.opts.recruitKind}s`}
                         {o.opts.manpower > 1 && ` · ${o.opts.manpower} men`}
                         {o.opts.repeat && ' · repeats'}
                         {o.opts.priority && ' · priority'}

@@ -49,6 +49,7 @@ import {
 } from './types';
 import { CENTRE_LOT, blockCenter, gangMembers, lotCenter } from './world';
 import { originalStartingWage } from './originalWages';
+import { protectionFee } from './premises';
 import { forgetEntityLists } from './entityLists';
 
 export function newId(w: WorldState): ID {
@@ -653,8 +654,7 @@ export function createWorld(options: GameOptions): { world: WorldState; rng: Rng
   const startingRacketChoices = new Map<ID, Building[]>();
   const previousRacketKnowledge = new Map<ID, number>();
   const seedProtection = (b: Building, gangId: ID) => {
-    const t = BUILDING_BY_ID[b.typeId];
-    const base = Math.round(Math.max(60, t.profit * 0.4));
+    const base = protectionFee(b);
     previousRacketKnowledge.set(b.id, b.knowledge[gangId] ?? 0);
     b.protection = { gangId, weekly: base, base, refusing: false, grievance: 0 };
     b.knowledge[gangId] = Math.max(b.knowledge[gangId] ?? 0, 2);
@@ -716,7 +716,9 @@ export function createWorld(options: GameOptions): { world: WorldState; rng: Rng
       poolIds: [],
       accountantId: null,
       lawyerId: null,
-      weapons: { pistol: 2, shotgun: 0, rifle: 0, tommy: 0, twinPistols: 0, explosives: 0 },
+      // The player's three pistols all start in the cache, to be handed out as he
+      // sees fit; a computer gang's first crew starts with one of them.
+      weapons: { pistol: isPlayer ? 3 : 2, shotgun: 0, rifle: 0, tommy: 0, twinPistols: 0, explosives: 0 },
       vehicles: { coupe: 1, truck: 0, speedster: 0 },
       offered: {},
       known: {},
@@ -802,7 +804,7 @@ export function createWorld(options: GameOptions): { world: WorldState; rng: Rng
       lieutenantId: lt.id,
       name: lt.name.split(' ')[0] + "'s Crew",
       memberIds: [],
-      weapons: { pistol: 1, shotgun: 0, rifle: 0, tommy: 0, twinPistols: 0, explosives: 0 },
+      weapons: { pistol: isPlayer ? 0 : 1, shotgun: 0, rifle: 0, tommy: 0, twinPistols: 0, explosives: 0 },
       vehicles: { coupe: 1, truck: 0, speedster: 0 },
       allocatedBlockIds: [],
       orderIds: [],

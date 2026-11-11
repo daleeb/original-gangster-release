@@ -187,6 +187,12 @@ export function LawyerTab() {
                 </button>
               ))}
             </div>
+            {officialKind === 'police' && (
+              <div className="row between" style={{ gap: 8, marginBottom: 8 }}>
+                <span className="muted tiny">One officer at a time here. To put every officer on an area's beats on the payroll, mark the area on the map.</span>
+                <button className="btn sm brass" onClick={() => beginSpecialistOrder('employPolice')}>Mark an area</button>
+              </div>
+            )}
             <div className="scroll-list">
               {officials.map((p) => {
                 const view = p.opinion[gang.id] ?? 0;

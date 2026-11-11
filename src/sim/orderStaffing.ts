@@ -13,10 +13,22 @@ export function readyForPlanning(w: WorldState, p: Person): boolean {
   return p.status === 'active' && p.buildingId == null && p.burningEscape?.week !== w.week;
 }
 
+/** Free to be sent on a job during the week. As in the original, a man who
+ * has finished one job goes straight on to the next: one only walking (or
+ * driving an empty car) back to the office is turned round where he is,
+ * rather than made to get home first while the rest of the week's orders wait. */
+export function freeForDispatch(w: WorldState, p: Person): boolean {
+  if (p.orderId != null || p.resumeOrderId != null || p.streetOrder) return false;
+  if (p.emergencyResponse || p.shockReaction) return false;
+  const car = p.vehicleKey ? w.vehicleFleet?.[p.vehicleKey] : undefined;
+  if (p.vehicleKey && !car) return true;
+  // Still bringing goods home, or unloading them: that journey is finished first.
+  return !car || (car.returning && !car.cargo && !car.unloading && car.orderId == null);
+}
+
 export function orderStaffing(w: WorldState, team: Team, order: Pick<Order, 'type' | 'opts'>, planning = false) {
   const members = crewPeople(w, team).filter(p => p.status !== 'dead');
-  const available = members.filter(p => readyForPlanning(w, p) &&
-    (planning || !p.vehicleKey && p.orderId == null && !p.dest && !p.streetOrder));
+  const available = members.filter(p => readyForPlanning(w, p) && (planning || freeForDispatch(w, p)));
   const want = Math.max(1, order.opts.manpower);
   const preferred = order.opts.preferredHoodId == null ? null : members.find(p => p.id === order.opts.preferredHoodId);
   let reason: string | null = null, impossible = false;
@@ -28,6 +40,14 @@ export function orderStaffing(w: WorldState, team: Team, order: Pick<Order, 'typ
     reason = `${preferred.name} is ${planning ? 'unavailable' : 'not free yet'}; this order needs that person.`;
   } else if (available.length < want) {
     reason = `This order needs ${want} people; ${available.length} ${available.length === 1 ? 'is' : 'are'} ${planning ? 'available' : 'free'}.`;
+    // Say what is keeping the others, so a queued order is not a mystery.
+    if (!planning) {
+      const busy = members.filter(p => !available.includes(p));
+      const working = busy.filter(p => p.status === 'active' && (p.orderId != null || p.resumeOrderId != null || p.streetOrder)).length;
+      const away = busy.filter(p => p.status !== 'active' || p.buildingId != null).length;
+      const parts = [working ? `${working} still on an earlier order` : '', away ? `${away} out of action or running a business` : ''].filter(Boolean);
+      if (parts.length) reason += ` (${parts.join(', ')}.) It starts as soon as enough of the crew are free.`;
+    }
   }
   const chosen = preferred && available.includes(preferred) ? [preferred] : [];
   const lt = available.find(p => p.id === team.lieutenantId);

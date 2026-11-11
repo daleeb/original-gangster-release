@@ -5,7 +5,8 @@ import { quoteBuildingSale, recallManager, repairBuilding, sackManager, sellBuil
 import { businessCarryingCost } from '../sim/businessState';
 import { goodsDeliverySummary } from '../sim/goodsDelivery';
 import { BUILDING_BY_ID } from '../sim/data/buildings';
-import { buildingValue, protectionBase } from '../sim/execution';
+import { buildingValue } from '../sim/execution';
+import { protectionFee } from '../sim/premises';
 import { buildingMapIntel } from '../sim/mapIntel';
 import {fireDamageStage} from '../sim/buildingDamage';
 import { buildingName, money } from '../sim/world';
@@ -118,9 +119,10 @@ export function BuildingPanel() {
           {b.state === 'destroyed' && (
             <div className="note">Rubble. Nobody can build here until it is cleared — and a ruined block drags the whole neighbourhood down.</div>
           )}
-          {knowledge < 2 && !mine && <div className="note">You know little of this place. Extort it, or send a hood to explore.</div>}
+          {knowledge < 2 && !mine && b.cls !== 'residential' && <div className="note">You know little of this place. Extort it, or send a hood to explore.</div>}
+          {b.cls === 'residential' && <div className="note">Plain houses: nobody here to extort, and nothing for sale.</div>}
           {b.cls !== 'illegal' && b.cls !== 'empty' && b.cls !== 'municipal' && b.cls !== 'residential' && !protection && !mine && (
-            <div className="note">Would pay roughly {money(protectionBase(w, b))} a week under your protection.</div>
+            <div className="note">Would pay roughly {money(protectionFee(b))} a week under your protection.</div>
           )}
 
           {/* ------------------------------------------------ owned */}

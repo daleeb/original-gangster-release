@@ -58,7 +58,7 @@ export const TUTORIALS: Tutorial[] = [
     blurb: 'Premises, fronts and the illegal trade behind them.',
     options: { ...QUIET, seed: 202, startMoney: 12_000 },
     steps: [
-      { text: 'Buy premises within two blocks of your territory', hint: 'Business Orders → Buy Premises, then click an unowned site. Empty land is cheapest.', done: (w, g) => hasOrder(w, g, ['buyPremises']) },
+      { text: 'Buy premises within two blocks of your territory', hint: 'Business Orders → Buy Premises, then click an unowned site. The land in the middle of a block is cheapest, but is only sold to you once you own a business in front of it.', done: (w, g) => hasOrder(w, g, ['buyPremises']) },
       { text: 'Own a second legal site', hint: 'The purchase completes during the week. Your sites are listed under City Maps → Controlled Businesses.', done: (w, g) => ownedBuildings(w, g).filter((b) => isLegalSite(b)).length >= 2 },
       { text: 'Own the centre lot of a block you have a legal front on', hint: 'Illegal businesses only fit the centre of a block, behind a legal site of yours on the same block. Your office already sits on one; this is about a second.', done: (w, g) => allBuildings(w).some((b) => b.ownerGangId === g && b.state !== 'destroyed' && w.lots[b.lotId]?.index === 4 && b.typeId !== 'office' && allBuildings(w).some(front => front.blockId === b.blockId && front.ownerGangId === g && isLegalSite(front) && front.state === 'trading' && (front.hidesId == null || front.hidesId === b.id))) },
       { text: 'Set up an illegal business behind the front', hint: 'Business Orders → Set Up Business on the centre lot. The closer the front matches, the better it hides.', done: (w, g) => allBuildings(w).some((b) => {

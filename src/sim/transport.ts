@@ -1,4 +1,4 @@
-import { DRIVE_MIN_DISTANCE, DRIVE_SPEED, MINUTES_PER_WEEK, VEHICLES, WALK_SPEED } from './constants';
+import { DRIVE_MIN_DISTANCE, DRIVE_SPEED, MINUTES_PER_WEEK, ORDERS, VEHICLES, WALK_SPEED } from './constants';
 import { hash32 } from './hash';
 import { cargoWarehouse, routeCargoReturn, unloadCargo } from './cargo';
 import { clearDestination, setDestination } from './movement';
@@ -30,10 +30,17 @@ export function runningCivilian(p: Person): boolean {
   return p.role === 'citizen' && !p.inVehicle && p.dest != null &&
     hash32(p.id * 7919 + Math.round(p.dest.x * 4) * 131 + Math.round(p.dest.y * 4)) % 64 === 0;
 }
+/** On a planned order after a named person who has been placed (not asking
+ * round the pool halls for him): he hurries as a man on a street order does. */
+function closingOnHisMan(p: Person, w?: WorldState): boolean {
+  const order = w && p.orderId != null ? w.orders[p.orderId] : undefined;
+  return !!order && order.state === 'travelling' && !order.hunting && !order.exportDelivery && !order.raidDelivery &&
+    ORDERS[order.type].target === 'person';
+}
 export function transportSpeed(p: Person, w?: WorldState): number {
   // Someone sent after a person on foot hurries, or an ambling target would
   // keep the same lead for ever at the original's walking pace.
-  if (!p.inVehicle) return p.streetOrder?.type === 'assault' || p.streetOrder?.type === 'kill' || runningCivilian(p) ? WALK_SPEED * PURSUIT_PACE : WALK_SPEED;
+  if (!p.inVehicle) return p.streetOrder?.type === 'assault' || p.streetOrder?.type === 'kill' || runningCivilian(p) || closingOnHisMan(p, w) ? WALK_SPEED * PURSUIT_PACE : WALK_SPEED;
   const v = vehicleOf(w,p), driver = v?.driverId == null ? p : w?.people[v.driverId] ?? p;
   const kind = v?.kind ?? (p.role === 'accountant' || p.role === 'lawyer' ?
     w?.gangs[p.gangId!]?.staffVehicles?.[p.role] : null);
@@ -43,6 +50,33 @@ function base(w: WorldState, gangId: ID, near: Vec2): Vec2 {
   const offices = allBuildings(w).filter(b => b.ownerGangId === gangId && b.typeId === 'office' && b.state !== 'destroyed');
   offices.sort((a,b) => dist(buildingDoor(w,a),near)-dist(buildingDoor(w,b),near));
   return offices[0] ? buildingDoor(w,offices[0]) : near;
+}
+const ownOffice = (w: WorldState, gangId: ID) =>
+  allBuildings(w).some(b => b.ownerGangId === gangId && b.typeId === 'office' && b.state !== 'destroyed');
+/** How near the office door counts as having gone in. */
+const OFFICE_DOOR_M = 4;
+/**
+ * Back at the office with nothing to do: one of the gang's men who has walked
+ * (or been driven) home and is waiting inside for his next order. Derived from
+ * where he is, so nothing is added to a save; and never `buildingId`, which
+ * means running a business and would take him out of his crew's staffing.
+ */
+export function atOffice(w: WorldState, p: Person, doors?: Vec2[]): boolean {
+  if (p.gangId == null || p.status !== 'active' || (p.role !== 'hood' && p.role !== 'lieutenant')) return false;
+  if (p.orderId != null || p.resumeOrderId != null || p.streetOrder || p.dest || p.vehicleKey || p.inVehicle || p.buildingId != null) return false;
+  return (doors ?? officeDoors(w, p.gangId)).some(door => dist(p.pos, door) <= OFFICE_DOOR_M);
+}
+/** The doors a gang's men go home to. The renderer asks once a frame and
+ * passes the list to `atOffice`, rather than search the city for every man. */
+export function officeDoors(w: WorldState, gangId: ID): Vec2[] {
+  return allBuildings(w).filter(b => b.ownerGangId === gangId && b.typeId === 'office' && b.state !== 'destroyed').map(b => buildingDoor(w, b));
+}
+/** What somebody with no order is doing, for the week's status lines. */
+export function restingStatus(w: WorldState, p: Person): string {
+  if (atOffice(w, p)) return 'At the office';
+  const ganged = p.gangId != null && (p.role === 'hood' || p.role === 'lieutenant');
+  if (p.dest) return ganged && ownOffice(w, p.gangId!) ? 'Returning to the office' : 'Travelling';
+  return 'Idle';
 }
 /** Where the gang's other cars stand, or are going to stand. */
 export function parkedSpots(w: WorldState, exceptKey: string): Vec2[] {
@@ -205,7 +239,13 @@ export function afterTransportStep(w:WorldState,p:Person,arrived:boolean):boolea
       if(v.cargo)routeCargoReturn(w,v);else sendHome(w,p);
       return false;
     }
-    if(arrived&&v.returning){for(const id of [...v.occupantIds])dismount(w,w.people[id]);}
+    if(arrived&&v.returning){
+      for(const id of [...v.occupantIds]){
+        const rider=w.people[id];dismount(w,rider);
+        // Home: out of the car and in at the office door, not left standing in the lane beside it.
+        if(rider?.gangId!=null&&rider.status==='active'&&ownOffice(w,rider.gangId))rider.pos={...base(w,rider.gangId,rider.pos)};
+      }
+    }
   }
   return arrived;
 }
@@ -289,7 +329,9 @@ export function resetWeekTransport(w:WorldState):void {
   for(const [key,v] of Object.entries(w.vehicleFleet??{})){
     if(v.cargo){v.cargo.purpose='return';v.cargo.orderId=null;v.orderId=null;}
     // Left out on the streets: it is still there next week (fetched, or taken from where it stands).
-    else if(v.teamId!=null&&stranded(w,v)){
+    // One whose crew was still aboard when the week ran out comes home with them: they start the next
+    // week at the office, and a car left across town was passed over, so a repeated order went on foot.
+    else if(v.teamId!=null&&stranded(w,v)&&!v.occupantIds.length){
       v.occupantIds=[];v.driverId=null;v.orderId=null;v.destination=null;v.boarding=false;v.returning=false;
       delete v.boardAfter;delete v.unloading;
     }

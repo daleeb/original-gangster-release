@@ -20,7 +20,7 @@ import { payCash, receiveAssetCash } from './finances';
 import { rememberAccountantTax } from './systems/taxes';
 import { businessFrontReady, resetBusinessInvestigation } from './businessState';
 import { recoverExportGoods } from './exportGoods';
-import { purchasablePremisesType } from './premises';
+import { centreLotNeedsFront, purchasablePremisesType } from './premises';
 import { donationAmount, donationTarget } from './charity';
 import { alight, releaseTransportOrder, removeFleetVehicle, sendHome } from './transport';
 import { availableSpecialist, reclaimStaffVehicle } from './specialists';
@@ -42,6 +42,8 @@ import {
   promoteToLieutenant,
   releaseGuardPost,
   stopBusinessGuards,
+  fitsWeek,
+  weekCharge,
 } from './execution';
 import { defect } from './systems/economy';
 import { campaignWeeklyCost, officeEntryCheck, enterElection, withdrawFromElection } from './systems/politics';
@@ -103,6 +105,23 @@ export interface IssueOrderInput {
   personId?: ID | null;
   pos?: Vec2 | null;
   opts?: Partial<OrderOptions>;
+  /** The queued order this one replaces (Edit Order): its own site is not a duplicate. */
+  replacingOrderId?: ID;
+}
+
+/** Orders on one site that only make sense once a week: a second raid on the
+ * same store paid a second haul, a second purchase failed at the door. */
+const ONE_PER_SITE: ReadonlySet<OrderType> = new Set<OrderType>(['raid', 'smashUp', 'torch', 'bomb', 'buyPremises', 'setUpBusiness', 'runBusiness']);
+
+/** This gang already has an order of this kind on the books for the site. */
+export function siteAlreadyOrdered(w: WorldState, gangId: ID, type: OrderType, buildingId: ID, ignoreOrderId?: ID): boolean {
+  if (!ONE_PER_SITE.has(type)) return false;
+  for (const o of Object.values(w.orders)) {
+    if (o.gangId !== gangId || o.type !== type || o.id === ignoreOrderId || o.isStreetOrder) continue;
+    if (o.state !== 'queued' && o.state !== 'travelling' && o.state !== 'executing' && o.state !== 'waiting') continue;
+    if (o.targetBuildingIds.includes(buildingId)) return true;
+  }
+  return false;
 }
 
 function validPoint(w: WorldState, pos: Vec2 | null | undefined): pos is Vec2 {
@@ -116,7 +135,7 @@ export function validBuildingTarget(w: WorldState, gangId: ID, type: OrderType, 
   if (b.state === 'destroyed') return false;
   switch (type) {
     case 'buyPremises':
-      return b.ownerGangId == null && purchasablePremisesType(b);
+      return b.ownerGangId == null && purchasablePremisesType(b) && !centreLotNeedsFront(w, gangId, b);
     case 'setUpBusiness': {
       if (b.discovered || b.fbiClosedWeek != null) return false;
       const business = opts.businessTypeId ? BUILDING_BY_ID[opts.businessTypeId] : null;
@@ -143,7 +162,7 @@ export function previewOrder(w: WorldState, gangId: ID, input: IssueOrderInput):
   const opts = defaultOptions(input.opts);
   const blockIds = [...new Set((input.blockIds ?? []).map(id => w.blocks[id]?.layout?.mergedInto ?? id))];
   const buildingIds = [...new Set(input.buildingIds ?? [])];
-  const targetBuildingIds = expandTargets(w, gangId, input.type, blockIds, buildingIds);
+  const targetBuildingIds = expandTargets(w, gangId, input.type, blockIds, buildingIds, opts);
   const charity = w.buildings[targetBuildingIds[0]];
   if (input.type === 'donate' && opts.amount == null && charity && donationTarget(charity)) opts.amount = donationAmount(w, charity);
   const order: Order = {
@@ -211,9 +230,14 @@ export function issueOrder(w: WorldState, gangId: ID, input: IssueOrderInput): A
   if (blockIds.some((id) => !w.blocks[id])) return fail('No such block.');
   if (buildingIds.some((id) => !w.buildings[id])) return fail('No such site.');
   if (def.target === 'building' && (buildingIds.length !== 1 || !validBuildingTarget(w, gangId, input.type, w.buildings[buildingIds[0]], opts))) {
+    const site = buildingIds.length === 1 ? w.buildings[buildingIds[0]] : null;
+    if (input.type === 'buyPremises' && site && site.ownerGangId == null && purchasablePremisesType(site) && centreLotNeedsFront(w, gangId, site))
+      return fail(CENTRE_LOT_NEEDS_FRONT);
     return fail('Choose a valid site for that order.');
   }
-  if (def.target === 'area' && buildingIds.some((id) => !isValidAreaTarget(w, gangId, input.type, w.buildings[id]))) {
+  if (def.target === 'building' && siteAlreadyOrdered(w, gangId, input.type, buildingIds[0], input.replacingOrderId))
+    return fail(`Another ${def.name} order already has that site this week.`);
+  if (def.target === 'area' && buildingIds.some((id) => !isValidAreaTarget(w, gangId, input.type, w.buildings[id], opts))) {
     return fail('That site is not valid for this order.');
   }
   if (def.target === 'person') {
@@ -229,6 +253,7 @@ export function issueOrder(w: WorldState, gangId: ID, input: IssueOrderInput): A
     input.type,
     blockIds,
     buildingIds,
+    opts,
   );
 
   // A whole-block order with no eligible sites (for example, a municipal or
@@ -251,12 +276,23 @@ export function issueOrder(w: WorldState, gangId: ID, input: IssueOrderInput): A
     : 0;
   if (price > gang.cash) return fail(`You cannot afford it: it costs $${Math.round(price).toLocaleString('en-US')}.`);
 
-  if (team.timeUsed + order.estimatedMinutes > MINUTES_PER_WEEK * 1.02) {
+  // One named man can only be in one place: his own jobs, end to end, must fit his week.
+  if (opts.preferredHoodId != null && !def.wholeWeek) {
+    const his = team.orderIds.map((id) => w.orders[id]).filter((o) => o && o.id !== input.replacingOrderId && o.state === 'queued' &&
+      !ORDERS[o.type].wholeWeek && o.opts.preferredHoodId === opts.preferredHoodId)
+      .reduce((sum, o) => sum + o.estimatedMinutes, 0);
+    if (his + order.estimatedMinutes > MINUTES_PER_WEEK * 1.02)
+      return fail(`${w.people[opts.preferredHoodId]?.name ?? 'That person'} has not got the time for another job this week. Send somebody else, or let the lieutenant choose.`);
+  }
+
+  const charge = weekCharge(w, team, order);
+  if (!fitsWeek(w, team, order, team.timeUsed)) {
     // Undermanned for the whole area, the lieutenant offers what he can manage.
     if (def.target === 'area' && targetBuildingIds.length > 1) {
       for (let k = targetBuildingIds.length - 1; k >= 1; k--) {
         const part = { ...order, targetBuildingIds: targetBuildingIds.slice(0, k), targetBlockIds: [] };
-        if (team.timeUsed + estimateMinutes(w, team, part) <= MINUTES_PER_WEEK * 1.02) {
+        part.estimatedMinutes = estimateMinutes(w, team, part);
+        if (fitsWeek(w, team, part, team.timeUsed)) {
           return {
             ok: false,
             error: `${lt.name} has not got the time for all ${targetBuildingIds.length} sites — he could manage ${k} of them.`,
@@ -272,7 +308,7 @@ export function issueOrder(w: WorldState, gangId: ID, input: IssueOrderInput): A
   order.id = newId(w);
   w.orders[order.id] = order;
   team.orderIds.push(order.id);
-  team.timeUsed += order.estimatedMinutes;
+  team.timeUsed += charge;
   if (w.options.tutorialId === 4 && gang.isPlayer && input.type === 'explore') {
     // Capture the target's allegiance when the order is accepted: territory
     // may change before the lesson card is next shown or the save is loaded.
@@ -293,8 +329,8 @@ export function issueOrder(w: WorldState, gangId: ID, input: IssueOrderInput): A
  * As the original selects an area: when the crew has not got the time for
  * every site picked, the farthest from its office are left off until the rest
  * fit the week. Null when everything fits (or the order is not an area order);
- * an empty list when not even one site would. `editingMinutes` is the time
- * of a queued order being replaced, which is given back.
+ * an empty list when not even one site would. `editingMinutes` is the share
+ * of the week (weekCharge) of a queued order being replaced, which is given back.
  */
 export function fitAreaToWeek(w: WorldState, gangId: ID, input: IssueOrderInput, editingMinutes = 0):
   { buildingIds: ID[]; dropped: number; total: number } | null {
@@ -302,21 +338,44 @@ export function fitAreaToWeek(w: WorldState, gangId: ID, input: IssueOrderInput,
   if (!team || def?.target !== 'area') return null;
   const order = previewOrder(w, gangId, input);
   if (!order || order.targetBuildingIds.length < 2) return null;
-  const free = MINUTES_PER_WEEK * 1.02 - Math.max(0, team.timeUsed - editingMinutes);
-  if (order.estimatedMinutes <= free) return null;
+  const committed = Math.max(0, team.timeUsed - editingMinutes);
+  if (fitsWeek(w, team, order, committed)) return null;
   const office = nearestOffice(w, gangId, w.blocks[0].center);
   const from = office ? w.lots[office.lotId].center : null;
   const sites = [...order.targetBuildingIds].sort((a, b) => from
     ? dist(from, w.lots[w.buildings[a].lotId].center) - dist(from, w.lots[w.buildings[b].lotId].center) : 0);
   for (let k = sites.length - 1; k >= 1; k--) {
     const part = { ...order, targetBuildingIds: sites.slice(0, k), targetBlockIds: [] };
-    if (estimateMinutes(w, team, part) <= free) return { buildingIds: part.targetBuildingIds, dropped: sites.length - k, total: sites.length };
+    part.estimatedMinutes = estimateMinutes(w, team, part);
+    if (fitsWeek(w, team, part, committed)) return { buildingIds: part.targetBuildingIds, dropped: sites.length - k, total: sites.length };
   }
   return { buildingIds: [], dropped: sites.length, total: sites.length };
 }
 
+/**
+ * A queued order's time depends on what its crew has when it sets out: a car
+ * handed over after the order was accepted shortens the journey, a man sent to
+ * the pool lengthens the job. While planning, work the crew's queued orders out
+ * again and total up its week, so the dial reads true without the player having
+ * to open and re-confirm each order.
+ */
+export function reestimateTeamOrders(w: WorldState, team: Team | undefined): void {
+  if (!team || w.phase !== 'planning') return;
+  let used = 0;
+  for (const id of team.orderIds) {
+    const order = w.orders[id];
+    if (!order || order.state === 'cancelled') continue;
+    if (order.state === 'queued') order.estimatedMinutes = estimateMinutes(w, team, order);
+    used += weekCharge(w, team, order);
+  }
+  team.timeUsed = used;
+}
+
 /** How far from your territory you may buy, in blocks. */
 export const BUY_REACH_BLOCKS = 2;
+
+/** Why the land in the middle of a block cannot be bought yet. */
+export const CENTRE_LOT_NEEDS_FRONT = 'Buy a business on this block first: the land behind it is only sold to somebody who owns one of its fronts.';
 
 /** Replace a queued job only after the revised job passes the usual validation. */
 export function replaceOrder(w: WorldState, gangId: ID, orderId: ID, input: IssueOrderInput): ApiResult {
@@ -324,8 +383,8 @@ export function replaceOrder(w: WorldState, gangId: ID, orderId: ID, input: Issu
   if (!old || old.gangId !== gangId || old.teamId !== input.teamId || old.state !== 'queued' || w.phase !== 'planning' || !team)
     return fail('Only a queued order can be edited.');
   const committed = team.timeUsed, index = team.orderIds.indexOf(orderId);
-  team.timeUsed = Math.max(0, committed - old.estimatedMinutes);
-  const result = issueOrder(w, gangId, input);
+  team.timeUsed = Math.max(0, committed - weekCharge(w, team, old));
+  const result = issueOrder(w, gangId, { ...input, replacingOrderId: orderId });
   if (!result.ok) { team.timeUsed = committed; return result; }
   const replacement = team.orderIds.pop()!;
   team.orderIds.splice(index, 1, replacement);
@@ -387,7 +446,7 @@ export function cancelOrder(w: WorldState, orderId: ID): ApiResult {
   const team = w.teams[order.teamId];
   if (team) {
     team.orderIds = team.orderIds.filter((id) => id !== orderId);
-    team.timeUsed = Math.max(0, team.timeUsed - order.estimatedMinutes);
+    team.timeUsed = Math.max(0, team.timeUsed - weekCharge(w, team, order));
   }
   for (const id of order.assignedIds) {
     if (order.type === 'guardBusiness') releaseGuardPost(w, id);
@@ -432,10 +491,10 @@ export function rolloverOrders(w: WorldState): void {
         if (order.type === 'collectProtection' && order.targetBlockIds.length) {
           const blocks = new Set(order.targetBlockIds);
           const picked = order.targetBuildingIds.filter(id => !blocks.has(w.buildings[id]?.blockId));
-          order.targetBuildingIds = expandTargets(w, order.gangId, order.type, order.targetBlockIds, picked);
+          order.targetBuildingIds = expandTargets(w, order.gangId, order.type, order.targetBlockIds, picked, order.opts);
         }
         order.estimatedMinutes = estimateMinutes(w, team, order);
-        team.timeUsed += order.estimatedMinutes;
+        team.timeUsed += weekCharge(w, team, order);
         keep.push(oid);
       } else {
         delete w.orders[oid];
@@ -474,17 +533,35 @@ export function sackPerson(w: WorldState, gangId: ID, personId: ID): ApiResult {
   const gang = w.gangs[gangId];
   const p = w.people[personId];
   if (!gang || !p) return fail('No such person.');
+  const crewId = p.teamId;
   defect(w, gang, personId);
+  // His crew is a man short (if it still exists: sacking a lieutenant breaks it up).
+  if (crewId != null) reestimateTeamOrders(w, w.teams[crewId]);
   // defect() already applied the original's leaving-the-gang hostility.
   opinionSet(p, gangId, Math.min(-40, (p.opinion[gangId] ?? 0) - 40), NO_ORIGINAL_CHANNEL);
   return ok(`${p.name} is back on the street.`);
+}
+
+/** Where one of your own is held out of the gang's reach, if he is: the cells,
+ * the courthouse, prison, or a rival's back room. */
+export function outOfReach(p: Person): string | null {
+  switch (p.status) {
+    case 'arrested': case 'onTrial': return 'behind bars awaiting trial';
+    case 'jailed': return 'in prison';
+    case 'kidnapped': return 'held by another gang';
+    default: return null;
+  }
 }
 
 export function killMember(w: WorldState, gangId: ID, personId: ID): ApiResult {
   const gang = w.gangs[gangId];
   const p = w.people[personId];
   if (!gang || !p) return fail('No such person.');
+  const held = outOfReach(p);
+  if (held) return fail(`${p.name} is ${held}: your people cannot get at him there.`);
+  const crewId = p.teamId;
   killPerson(w, p, `executed on the orders of ${gang.name}`);
+  if (crewId != null) reestimateTeamOrders(w, w.teams[crewId]);
   // No police case — but the rest of the gang notices.
   for (const t of teamsOf(w, gang)) {
     const lt = w.people[t.lieutenantId];
@@ -505,6 +582,8 @@ export function promote(w: WorldState, gangId: ID, personId: ID): ApiResult {
     return fail('That hood is not in the pool or a crew.');
   if (gang.teamIds.length >= MAX_TEAMS) return fail('You already have eight lieutenants.');
   const team = promoteToLieutenant(w, gang, p);
+  // The crew he left has one fewer for its queued orders.
+  if (team && crew) reestimateTeamOrders(w, w.teams[crew.id]);
   return team ? ok(`${p.name} now runs his own crew.`) : fail('Could not promote.');
 }
 
@@ -533,6 +612,8 @@ export function moveToTeam(w: WorldState, gangId: ID, personId: ID, teamId: ID):
   gang.poolIds = gang.poolIds.filter((id) => id !== personId);
   team.memberIds.push(personId);
   p.teamId = teamId;
+  reestimateTeamOrders(w, old ?? undefined);
+  reestimateTeamOrders(w, team);
   return ok();
 }
 
@@ -546,6 +627,7 @@ export function moveToPool(w: WorldState, gangId: ID, personId: ID): ApiResult {
   if (old) old.memberIds = old.memberIds.filter((id) => id !== personId);
   p.teamId = null;
   if (!gang.poolIds.includes(personId)) gang.poolIds.push(personId);
+  reestimateTeamOrders(w, old ?? undefined);
   return ok();
 }
 
@@ -622,6 +704,7 @@ export function hireRecruit(
     if (team && team.memberIds.length < MAX_TEAM_SIZE - 1) {
       team.memberIds.push(p.id);
       p.teamId = teamId;
+      reestimateTeamOrders(w, team);
       return ok(`${p.name} joined ${team.name}.`);
     }
   }
@@ -695,6 +778,7 @@ export function buyVehicle(w: WorldState, gangId: ID, vehicle: VehicleId, teamId
   payCash(w, gang, 'purchases', cost, 'capital');
   if (teamId != null && w.teams[teamId]) {
     w.teams[teamId].vehicles[vehicle] = (w.teams[teamId].vehicles[vehicle] ?? 0) + 1;
+    reestimateTeamOrders(w, w.teams[teamId]);
   } else {
     gang.vehicles[vehicle] = (gang.vehicles[vehicle] ?? 0) + 1;
   }
@@ -710,6 +794,7 @@ export function sellVehicle(w: WorldState, gangId: ID, vehicle: VehicleId, teamI
   if ((store[vehicle] ?? 0) <= 0) return fail('You have none to sell.');
   if(!removeFleetVehicle(w,teamId!=null?w.teams[teamId]:gang,vehicle))return fail('That vehicle is out with a crew or carrying goods. Bring it back first.');
   store[vehicle]--;
+  if (teamId != null) reestimateTeamOrders(w, w.teams[teamId]);
   receiveAssetCash(w, gang, Math.round(VEHICLES[vehicle].cost * 0.5), VEHICLES[vehicle].cost);
   return ok(`Sold a ${VEHICLES[vehicle].name}.`);
 }
@@ -736,6 +821,8 @@ export function transferVehicle(
     team.vehicles[vehicle]--;
     gang.vehicles[vehicle] = (gang.vehicles[vehicle] ?? 0) + 1;
   }
+  // The journeys of the orders already accepted are quicker (or slower) for it.
+  reestimateTeamOrders(w, team);
   return ok();
 }
 

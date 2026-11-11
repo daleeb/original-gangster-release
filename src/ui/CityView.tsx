@@ -23,6 +23,8 @@ import { specialistTargetEligible } from '../sim/specialistJobs';
 import { lieutenantAreaChoices } from '../sim/lieutenantAreas';
 import { yieldForPaint } from '../yieldForPaint';
 import { StreetLoading } from './StreetLoading';
+import { WEEK_DAYS, weekTime } from './WeekClock';
+import { dayIndex } from '../sim/world';
 import { peopleList } from '../sim/entityLists';
 
 /**
@@ -34,6 +36,8 @@ export function CityView() {
   const rendererRef = useRef<CityRenderer | null>(null);
   const readyForInput = useRef(false);
   const [cityStatus, setCityStatus] = useState<'opening' | 'ready' | 'failed'>('opening');
+  /** What the graphics layer said when the city could not be drawn. */
+  const [cityError, setCityError] = useState<string | null>(null);
   const [openingMessage, setOpeningMessage] = useState('Preparing the city…');
   const [renderAttempt, setRenderAttempt] = useState(0);
   const dragging = useRef(false);
@@ -46,12 +50,14 @@ export function CityView() {
 
   const sim = useGame((s) => s.sim);
   const streetLoading = useGame((s) => s.streetLoading);
+  const finishingWeek = useGame((s) => s.finishingWeek);
 
   // Keep the renderer in sync with a brand new simulation.
   useEffect(() => {
     if (!canvasRef.current || !sim) return;
     readyForInput.current = false;
     setCityStatus('opening');
+    setCityError(null);
     const canvas = canvasRef.current;
     let alive = true;
     let ownedRenderer: CityRenderer | null = null;
@@ -221,6 +227,7 @@ export function CityView() {
               preparing = false;
               preparationFailed = true;
               setCityStatus('failed');
+              setCityError(error instanceof Error ? error.message : String(error));
               console.error('City preparation failed', error);
             });
           }
@@ -276,6 +283,7 @@ export function CityView() {
       if (cameraApi.ref === ownedRenderer) cameraApi.ref = null;
       rendererRef.current = null;
       setCityStatus('failed');
+      setCityError(error instanceof Error ? error.message : String(error));
       console.error('City construction failed', error);
     });
 
@@ -294,6 +302,11 @@ export function CityView() {
       }
     };
   }, [sim, renderAttempt]);
+
+  // The menu's demonstration city has nobody to choose what to do about a
+  // street view that will not open: it simply goes back to the menu.
+  const attract = useGame((s) => s.attract);
+  useEffect(() => { if (attract && cityStatus === 'failed') useGame.getState().endAttract(); }, [attract, cityStatus]);
 
   // Redraw the ground whenever the player changes overlays or buys something.
   const version = useGame((s) => s.version);
@@ -417,11 +430,16 @@ export function CityView() {
 
   const pickMode = useGame((s) => s.pickMode);
 
-  const showStreetLoading = streetLoading || (cityStatus !== 'ready' && sim?.world.phase === 'week');
+  const week = sim?.world.phase === 'week';
+  const showStreetLoading = streetLoading || (cityStatus !== 'ready' && week);
   return (
     <>
     <div ref={boxRef} className="select-box" hidden />
+    {/* A new canvas for every attempt: one whose graphics context was lost or
+        refused keeps handing back the same dead context, so Try Again on the
+        old canvas could never succeed. */}
     <canvas
+      key={renderAttempt}
       ref={canvasRef}
       aria-busy={streetLoading || cityStatus !== 'ready'}
       className={`city-canvas${pickMode ? ' picking' : ''}`}
@@ -435,7 +453,15 @@ export function CityView() {
     />
     {showStreetLoading ? <StreetLoading
       message={sim?.world.phase === 'planning' ? 'Saving your orders and getting the week ready…' : openingMessage}
-      failed={cityStatus === 'failed'} onRetry={() => setRenderAttempt(n => n + 1)} onExit={() => useGame.getState().setScreen('menu')} /> :
+      // Only once the week has opened: before that the orders are still being saved.
+      failed={cityStatus === 'failed' && !!week}
+      resolving={finishingWeek && !!week}
+      progress={week && sim ? `${WEEK_DAYS[dayIndex(sim.world.minute)] ?? 'Fri'} · ${weekTime(sim.world.minute)}` : undefined}
+      detail={cityError} attempts={renderAttempt}
+      onRetry={() => setRenderAttempt(n => n + 1)}
+      onSkip={() => { void useGame.getState().runWeekUnseen(); }}
+      onStop={() => useGame.getState().cancelFinishWeek()}
+      onExit={() => useGame.getState().setScreen('menu')} /> :
     cityStatus !== 'ready' && <div className="city-opening">
       <div className="paper city-opening-card">
         <p role={cityStatus === 'failed' ? 'alert' : 'status'}>

@@ -4425,6 +4425,22 @@
               }
             ]
           }
+        },
+        "recruitKind": {
+          "optional": true,
+          "shape": {
+            "union": [
+              {
+                "literal": "hood"
+              },
+              {
+                "literal": "accountant"
+              },
+              {
+                "literal": "lawyer"
+              }
+            ]
+          }
         }
       }
     },

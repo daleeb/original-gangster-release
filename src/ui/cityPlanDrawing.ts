@@ -248,12 +248,14 @@ export function drawElevatedRail(ctx: CanvasRenderingContext2D, w: WorldState,
 
 /** One parcel's rooftop, seen from above, with ownership and targeting on top. */
 export function drawPlanLot(ctx: CanvasRenderingContext2D, w: WorldState, b: Building,
-  x: number, y: number, s: number, viewer: ID, valid: boolean, picked: boolean, heatMap = false, height = s): void {
-  const intel = buildingMapIntel(b, viewer);
+  x: number, y: number, s: number, viewer: ID, valid: boolean, picked: boolean, heatMap = false, height = s,
+  /** The building this lot is part of (premises.ts siteBuilding): whose it is and how it is roofed. */
+  site: Building = b): void {
+  const intel = buildingMapIntel(site, viewer);
   const owner = intel.ownerGangId != null ? w.gangs[intel.ownerGangId] : null;
   const protector = intel.protectionGangId != null ? w.gangs[intel.protectionGangId] : null;
   // A hidden illegal business looks like the yard it sits in.
-  const cls: BuildingClass = intel.siteKnown ? b.cls : 'empty';
+  const cls: BuildingClass = intel.siteKnown ? site.cls : 'empty';
   const gap = Math.max(.5, Math.min(1.6, Math.min(s, height) * .05));
   const rx = x + gap, ry = y + gap, rw = s - gap * 2, rh = height - gap * 2;
   if (rw <= 0 || rh <= 0) return;
@@ -273,7 +275,7 @@ export function drawPlanLot(ctx: CanvasRenderingContext2D, w: WorldState, b: Bui
     ctx.strokeStyle = GANG_COLORS[protector.color].hex;
     ctx.lineWidth = Math.max(1.5, Math.min(2.5, s * .12));
     ctx.strokeRect(x + .5, y + .5, s - 1, height - 1);
-    if (b.protection?.refusing) {
+    if (site.protection?.refusing) {
       ctx.strokeStyle = PLAN.label; ctx.setLineDash([2, 2]);
       ctx.strokeRect(x + .5, y + .5, s - 1, height - 1); ctx.setLineDash([]);
     }

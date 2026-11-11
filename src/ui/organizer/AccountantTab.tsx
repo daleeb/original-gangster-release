@@ -20,6 +20,7 @@ import { taxNotCoveredUp } from '../../sim/systems/taxes';
 export function AccountantTab() {
   const sim = useGame((s) => s.sim)!;
   const notify = useGame((s) => s.notify);
+  const bureauGauges = useGame((s) => s.bureauGauges);
   useGame((s) => s.version);
 
   const w = sim.world;
@@ -207,16 +208,20 @@ export function AccountantTab() {
           <b className="mono">{money(gang.riskyMoney)}</b>
         </div>
         <Meter value={Math.min(100, gang.riskyMoney / 200)} />
-        <div className="row between tiny" style={{ margin: '9px 0 3px' }}>
-          <span>FBI suspicion</span>
-          <b className="mono">{Math.round(gang.suspicion)}%</b>
-        </div>
-        <Meter value={gang.suspicion} />
-        <div className="row between tiny" style={{ margin: '9px 0 3px' }}>
-          <span>Evidence against you</span>
-          <b className="mono">{Math.round(gang.evidence)}%</b>
-        </div>
-        <Meter value={gang.evidence} />
+        {bureauGauges ? <>
+          <div className="row between tiny" style={{ margin: '9px 0 3px' }}>
+            <span>FBI suspicion</span>
+            <b className="mono">{Math.round(gang.suspicion)}%</b>
+          </div>
+          <Meter value={gang.suspicion} />
+          <div className="row between tiny" style={{ margin: '9px 0 3px' }}>
+            <span>Evidence against you</span>
+            <b className="mono">{Math.round(gang.evidence)}%</b>
+          </div>
+          <Meter value={gang.evidence} />
+        </> : <div className="muted tiny" style={{ margin: '9px 0 3px' }}>
+          How closely the Bureau is watching is for you to judge from your books (Game Options → View shows the gauges).
+        </div>}
         <Hint>
           Illegal income you cannot explain is what brings the Bureau. Buy legal businesses to soak
           it up, or stop trading for a week to let the heat fall.

@@ -21,7 +21,13 @@ installDeskTextures();
 export function App() {
   const [title, setTitle] = useState(titleWanted);
   const done = () => { try { sessionStorage.setItem('og.titleSeen', '1'); } catch { /* session only */ } setTitle(false); };
-  return <><ScreenContent />{title && <TitleSequence onDone={done} />}<Toast /><LoadingSave /></>;
+  return <><ScreenContent />{title && <TitleSequence onDone={done} />}<Toast /><LoadingSave /><VersionStamp /></>;
+}
+
+/** The release version in the corner of every screen (menu, planning, the
+ * working week, dialogs), so a screenshot in a bug report says what it shows. */
+function VersionStamp() {
+  return <div className="version-stamp" aria-label={`Version ${__APP_VERSION__}`}>v{__APP_VERSION__}</div>;
 }
 
 function LoadingSave() {
