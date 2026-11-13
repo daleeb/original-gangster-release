@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { SAVE_NAME_MAX, useGame } from '../../app/store';
 import { slotLoadable } from '../../app/save';
+import { useSaveActions } from '../saveActions';
 import { cameraApi } from '../CityView';
 import { describeMode } from '../../app/newGame';
 import { audio } from '../../audio/audio';
@@ -68,6 +69,7 @@ export function OptionsTab() {
   const startGame = useGame((s) => s.startGame);
   const [quit, setQuit] = useState<null | 'restart' | 'fresh' | 'menu'>(null);
   const [overwrite, setOverwrite] = useState<string | null>(null);
+  const { busy, exportSlot, setDeleting, importControl, feedback, confirmation } = useSaveActions();
   useGame((s) => s.version);
 
   const w = sim.world;
@@ -140,24 +142,31 @@ export function OptionsTab() {
       </Panel>
 
       <Panel title="Load Game">
+        <div style={{ borderBottom: '1px dotted #bdb094', marginBottom: 4, paddingBottom: 8 }}>
+          {importControl}
+          {feedback}
+        </div>
         {savesError && <p role="alert">{savesError} <button className="btn" onClick={() => void refreshSaves()}>Retry</button></p>}
         {saves.length === 0 && !savesError ? (
           <Empty>No saved games.</Empty>
         ) : (
-          saves.map((s) => (
-            <div key={s.id} className="row between" style={{ padding: '4px 0', borderBottom: '1px dotted #bdb094' }}>
+          saves.map((s, index) => (
+            <div key={s.id} className="row between" style={{ padding: '4px 0', borderTop: index ? '1px dotted #bdb094' : undefined, flexWrap: 'wrap', gap: 4 }}>
               <div>
                 <b className="tiny">{s.name}</b>
                 <div className="muted tiny">
                   {s.error ?? `${s.bossName} · Week ${s.week}`}
                 </div>
               </div>
-              <button className="btn sm" disabled={!slotLoadable(s)} onClick={() => loadFromSlot(s)}>
-                Load
-              </button>
+              <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
+                <button className="btn sm" disabled={!slotLoadable(s) || busy} onClick={() => void exportSlot(s)}>Export</button>
+                <button className="btn sm" disabled={!slotLoadable(s)} onClick={() => loadFromSlot(s)}>Load</button>
+                <button className="btn sm red-text" onClick={() => setDeleting(s)}>Delete</button>
+              </div>
             </div>
           ))
         )}
+        {confirmation}
       </Panel>
 
       <Panel title="View">

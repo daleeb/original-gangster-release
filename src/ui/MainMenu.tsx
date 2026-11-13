@@ -1,11 +1,12 @@
 import { ArtImage } from './ArtImage';
 import { useEffect, useState } from 'react';
 import { useGame } from '../app/store';
-import { deleteSave, loadHallOfFame, slotLoadable, type HallEntry, type SaveSlot } from '../app/save';
+import { loadHallOfFame, slotLoadable, type HallEntry, type SaveSlot } from '../app/save';
 import { gangManpower, money, territoryCount } from '../sim/world';
 import { art } from './art';
 import { CityPlan } from './desk/CityPlan';
-import { ConfirmDialog, Modal } from './common';
+import { Modal } from './common';
+import { useSaveActions } from './saveActions';
 import { Plaque } from './Plaque';
 import { audio } from '../audio/audio';
 import { HelpSheet } from './HelpSheet';
@@ -51,7 +52,7 @@ export function MainMenu() {
   const startGame = useGame((s) => s.startGame);
 
   const [sheet, setSheet] = useState<Sheet>(null);
-  const [deleting, setDeleting] = useState<SaveSlot | null>(null);
+  const { busy, exportSlot, setDeleting, importControl, feedback, confirmation } = useSaveActions();
   const [hall, setHall] = useState<HallEntry[]>([]);
   const [cursor, setCursor] = useState(0);
   const [lesson, setLesson] = useState(TUTORIALS[0]?.id ?? 1);
@@ -161,6 +162,10 @@ export function MainMenu() {
 
       {sheet === 'load' && (
         <Modal title="Load Game" kicker={`Saved games · ${saves.length}`} onClose={() => setSheet(null)}>
+          <div style={{ paddingBottom: 12, marginBottom: 8, borderBottom: '1px dotted var(--dots)' }}>
+            {importControl}
+            {feedback}
+          </div>
           {savesError && <p role="alert">{savesError} <button className="btn" onClick={() => void refreshSaves()}>Retry</button></p>}
           {saves.length === 0 && !savesError ? (
             <p className="muted">No saved games yet. The game saves itself every Monday morning.</p>
@@ -185,6 +190,7 @@ export function MainMenu() {
                     </div>
                   </div>
                   <div className="row">
+                    <button className="btn" disabled={!slotLoadable(s) || busy} onClick={() => void exportSlot(s)}>Export</button>
                     <button
                       className="btn brass"
                       disabled={!slotLoadable(s)}
@@ -208,19 +214,7 @@ export function MainMenu() {
           )}
         </Modal>
       )}
-      {deleting && (
-        <ConfirmDialog
-          text={`Delete "${deleting.name}"? ${deleting.id === 'Autosave' ? 'This is your automatic save. ' : ''}It cannot be brought back.`}
-          onYes={() => {
-            const id = deleting.id;
-            setDeleting(null);
-            void deleteSave(id)
-              .then(() => refreshSaves())
-              .catch(() => useGame.getState().notify({ ok: false, error: "Could not delete this save. Retry when storage is available." }));
-          }}
-          onNo={() => setDeleting(null)}
-        />
-      )}
+      {confirmation}
 
       {sheet === 'hall' && <HallOfFame onClose={() => { setHall(loadHallOfFame()); setSheet(null); }} />}
 

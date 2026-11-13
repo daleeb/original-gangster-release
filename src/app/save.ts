@@ -34,6 +34,34 @@ export async function loadSlotWorld(slot: SaveSlot): Promise<SaveSlot> {
   return decodeSlot(await disk.read(slot.id), true);
 }
 
+/** Portable save envelope, independent of the browser or desktop storage format. */
+export async function exportSave(slot: SaveSlot): Promise<string> {
+  const loaded = await loadSlotWorld(slot);
+  if (!loaded.world || loaded.error) throw Error(loaded.error ?? 'This save is unavailable.');
+  return JSON.stringify({ kind: 'original-gangster-save', version: 1, name: loaded.name,
+    campaignId: campaignId(loaded.world), world: loaded.world });
+}
+
+/** Validate before writing; imported saves never replace an existing slot. */
+export async function importSave(text: string): Promise<string> {
+  let data: Record<string, unknown>;
+  try { data = JSON.parse(text); } catch { throw Error('This file is not valid JSON.'); }
+  if (!data || typeof data !== 'object' || data.kind !== 'original-gangster-save' || data.version !== 1)
+    throw Error('This is not a supported Original Gangster save file.');
+  await validateSaveWorldResponsive(data.world);
+  const world = data.world as WorldState;
+  if (typeof data.campaignId === 'string' && data.campaignId) campaignIds.set(world, data.campaignId);
+  const base = (typeof data.name === 'string' ? data.name.trim() : '').slice(0, 60) || 'Imported game';
+  const existing = new Set((await loadGame()).map(slot => slot.id.toLowerCase()));
+  let name = base;
+  for (let n = 2; existing.has(name.toLowerCase()) || name.toLowerCase() === 'autosave'; n++) {
+    const suffix = ` (${n})`;
+    name = base.slice(0, 60 - suffix.length) + suffix;
+  }
+  await saveGame(name, world);
+  return name;
+}
+
 /** The desktop build's save files (electron/preload.cjs); absent in a browser. */
 interface DesktopSaves {
   list(): Promise<unknown[]>;
