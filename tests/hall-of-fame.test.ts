@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { defaultGameOptions } from '../src/app/newGame';
-import { addHallOfFame, clearHallOfFame, HALL_LEGENDS, hallOfFameTable, cloneSavedWorld, cloneSavedWorldResponsive, decodeSlot, loadGame, loadHallOfFame, recordHallOfFame, saveGame } from '../src/app/save';
+import { addHallOfFame, clearHallOfFame, HALL_LEGENDS, hallOfFameTable, cloneSavedWorld, cloneSavedWorldResponsive, decodeSlot, exportSave, importSave, loadGame, loadHallOfFame, recordHallOfFame, saveGame } from '../src/app/save';
 import { Sim } from '../src/sim/sim';
 import { hallPages, NEXT_BEST_PAGE, TOP_GANGSTERS } from '../src/ui/HallOfFame';
 
@@ -24,6 +24,16 @@ function finished() {
 }
 
 describe('Hall of Fame terminal reloads', () => {
+  it('keeps campaign identity through export and import', async () => {
+    const world = finished();
+    await saveGame('Finished', world);
+    recordHallOfFame(world);
+    const first = loadHallOfFame();
+    await importSave(await exportSave((await loadGame())[0]));
+    const imported = (await loadGame()).find(slot => slot.name === 'Finished (2)')!;
+    recordHallOfFame(imported.world!);
+    expect(loadHallOfFame()).toEqual(first);
+  });
   it.each(['synchronous', 'responsive'])('records once across %s restoration and renamed save without changing simulation state', async mode => {
     const world = finished(), before = JSON.stringify(world);
     await saveGame('Finished', world);

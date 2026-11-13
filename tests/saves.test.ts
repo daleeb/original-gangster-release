@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBDatabase } from 'fake-indexeddb';
 import { act, useGame } from '../src/app/store';
 import { defaultGameOptions } from '../src/app/newGame';
-import { loadGame, saveGame } from '../src/app/save';
+import { exportSave, importSave, loadGame, saveGame } from '../src/app/save';
 import { issueOrder } from '../src/sim/api';
 import { MINUTES_PER_WEEK } from '../src/sim/constants';
 import { MINUTES_PER_SECOND } from '../src/sim/sim';
@@ -14,6 +14,45 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('save boundaries and feedback', () => {
+  it('exports and imports a validated save without overwriting existing slots', async () => {
+    const sim = useGame.getState().sim!;
+    await saveGame('Campaign', sim.world);
+    const [original] = await loadGame();
+    const file = await exportSave(original);
+    sim.playerGang.cash = 1;
+    expect(await importSave(file)).toBe('Campaign (2)');
+    const slots = await loadGame();
+    expect(slots).toHaveLength(2);
+    expect(slots.find(s => s.name === 'Campaign (2)')!.world).toEqual(original.world);
+    await expect(importSave('{')).rejects.toThrow();
+    await expect(importSave(JSON.stringify({ kind: 'original-gangster-save', version: 1, world: {} }))).rejects.toThrow();
+    expect(await loadGame()).toHaveLength(2);
+  });
+
+  it('rejects unsupported and damaged files without changing existing saves', async () => {
+    await saveGame('Kept', useGame.getState().sim!.world);
+    const before = await loadGame();
+    for (const file of ['{', 'null', JSON.stringify({ kind: 'other', version: 1 }),
+      JSON.stringify({ kind: 'original-gangster-save', version: 2 }),
+      JSON.stringify({ kind: 'original-gangster-save', version: 1, world: {} })]) {
+      await expect(importSave(file)).rejects.toThrow();
+    }
+    expect(await loadGame()).toEqual(before);
+  });
+
+  it('chooses distinct names for repeated imports, reserved autosaves and long names', async () => {
+    await saveGame('Campaign', useGame.getState().sim!.world);
+    const file = await exportSave((await loadGame())[0]);
+    expect(await importSave(file)).toBe('Campaign (2)');
+    expect(await importSave(file)).toBe('Campaign (3)');
+    const data = JSON.parse(file);
+    data.name = 'aUtOsAvE';
+    expect(await importSave(JSON.stringify(data))).toBe('aUtOsAvE (2)');
+    data.name = 'x'.repeat(80);
+    expect(await importSave(JSON.stringify(data))).toBe('x'.repeat(60));
+    expect(await importSave(JSON.stringify(data))).toBe(`${'x'.repeat(56)} (2)`);
+    expect((await loadGame()).map(s => s.name)).toContain('Campaign');
+  });
   it('snapshots before waiting for storage and reports only after commit', async () => {
     const state = useGame.getState();
     const cash = state.sim!.playerGang.cash;
